@@ -52,4 +52,27 @@ describe('buildOtlpPayload (v1.2.0 — generic)', () => {
     const sn = resourceAttrs.find((a: any) => a.key === 'service.name');
     expect((sn?.value as any)?.stringValue).toBe('claude-code');
   });
+
+  it('emits pinta.guard.* attributes when guard result is provided', () => {
+    const payload = buildOtlpPayload({
+      event: {
+        hook_event_name: 'PreToolUse',
+        session_id: 's',
+        transcript_path: '/t',
+        cwd: '/t',
+        tool_name: 'Bash',
+        tool_input: {},
+        tool_use_id: 'u1',
+      } as any,
+      traceId: '01HQXM7Y9YZJ8MK7Z6P3X1V8R0',
+      guard: { decision: 'DENY', reason: 'deny_credentials', durationMs: 8 },
+    });
+    const span = payload.resourceSpans[0].scopeSpans[0].spans[0];
+    const decision = span.attributes.find((a: any) => a.key === 'pinta.guard.decision');
+    const rule = span.attributes.find((a: any) => a.key === 'pinta.guard.matched_rule');
+    const dur = span.attributes.find((a: any) => a.key === 'pinta.guard.duration_ms');
+    expect((decision?.value as any)?.stringValue).toBe('deny');
+    expect((rule?.value as any)?.stringValue).toBe('deny_credentials');
+    expect((dur?.value as any)?.intValue).toBe(8);
+  });
 });

@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import type { BaseEvent } from "./types.js";
 import { redact, truncate } from "./redact.js";
+import type { GuardResult } from "./guard.js";
 
 const PLUGIN_VERSION = "1.2.0"; // keep in sync with .claude-plugin/plugin.json
 
@@ -207,9 +208,23 @@ export function buildOtlpPayload(args: {
   event: BaseEvent;
   traceId: string; // ULID (26 chars)
   now?: number; // ms since epoch; injectable for tests
+  guard?: GuardResult | null;
 }): OtlpPayload {
   const ts = args.now ?? Date.now();
   const tsNano = (BigInt(ts) * 1_000_000n).toString();
+  const attrs = flattenEvent(args.event);
+  if (args.guard) {
+    attrs.push(
+      { key: 'pinta.guard.decision', value: { stringValue: args.guard.decision.toLowerCase() } },
+      { key: 'pinta.guard.duration_ms', value: { intValue: args.guard.durationMs } },
+    );
+    if (args.guard.reason) {
+      attrs.push({ key: 'pinta.guard.matched_rule', value: { stringValue: args.guard.reason } });
+    }
+    if (args.guard.failOpenReason) {
+      attrs.push({ key: 'pinta.guard.fail_open_reason', value: { stringValue: args.guard.failOpenReason } });
+    }
+  }
   const span: OtlpSpan = {
     traceId: ulidToTraceId(args.traceId),
     spanId: newSpanId(),
@@ -217,7 +232,7 @@ export function buildOtlpPayload(args: {
     kind: 1, // SPAN_KIND_INTERNAL
     startTimeUnixNano: tsNano,
     endTimeUnixNano: tsNano,
-    attributes: flattenEvent(args.event),
+    attributes: attrs,
   };
   return {
     resourceSpans: [
