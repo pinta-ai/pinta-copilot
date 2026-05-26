@@ -1,3 +1,10 @@
+// Load ~/.claude/pinta-cc.env BEFORE any other import that may read process.env.
+// Manager v0.1.6+ writes the env file; v0.1.5 (shell-prefix) still works because
+// loadEnvFile only fills in unset keys. See src/env-file.ts for the migration
+// rationale.
+import { loadEnvFile } from "./env-file.js";
+loadEnvFile();
+
 import { bridgeUserConfigToOtelEnv } from "./core/env-bridge.js";
 import { loadConfig } from "./core/config.js";
 import {
