@@ -64,5 +64,5 @@ jobs:
           if [ "$SKIP" = "true" ]; then
             PUBLISH_STATE="skipped (version unchanged)"
           fi
-          payload=$(printf '%s' '{"attachments":[{"color":"'"$COLOR"'","title":"@pinta-ai/pinta-cc publish","text":"'"$STATUS_TEXT"' - publish '"$PUBLISH_STATE"'","fields":[{"title":"Version","value":"'"$VERSION"'","short":true},{"title":"Install","value":"npm install @pinta-ai/pinta-cc@'"$VERSION"'","short":false},{"title":"Run","value":"'"$WORKFLOW_URL"'","short":false}]}]}')
+          payload=$(printf '%s' '{"attachments":[{"color":"'"$COLOR"'","title":"@pinta-ai/pinta-copilot publish","text":"'"$STATUS_TEXT"' - publish '"$PUBLISH_STATE"'","fields":[{"title":"Version","value":"'"$VERSION"'","short":true},{"title":"Install","value":"npm install @pinta-ai/pinta-copilot@'"$VERSION"'","short":false},{"title":"Run","value":"'"$WORKFLOW_URL"'","short":false}]}]}')
           curl -X POST -H 'Content-type: application/json' --data "$payload" "$WEBHOOK_URL"

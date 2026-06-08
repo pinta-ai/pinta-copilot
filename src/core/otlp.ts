@@ -1,54 +1,19 @@
 import crypto from "crypto";
-import fs from "fs";
 import os from "os";
-import path from "path";
-import type { BaseEvent } from "./types.js";
 import { redact, truncate } from "./redact.js";
 import type { GuardResult } from "./guard.js";
+import { type RawEvent, eventName } from "./types.js";
+import type { Surface } from "./surface.js";
 
-const PLUGIN_VERSION = "1.2.0"; // keep in sync with .claude-plugin/plugin.json
+const SDK_VERSION = "0.1.0"; // keep in sync with package.json
 
 /**
- * Resolve the Claude Code CLI version by walking up from the binary path
- * (CLAUDE_CODE_EXECPATH) until we find the `@anthropic-ai/claude-code`
- * package.json. Different install layouts (npm global, pnpm, bundled) put
- * the binary at different depths, so we can't hard-code "..".
- *
- * Cached at module scope — one read per hook process.
- * Falls back to "unknown" on any failure so a missing CLI never fails the hook.
+ * Copilot CLI/ext version is not reliably discoverable from the hook process
+ * env (unlike Claude Code's CLAUDE_CODE_EXECPATH). Read an optional override,
+ * else "unknown" — a missing version must never fail the hook.
  */
-let cachedCliVersion: string | null = null;
-function getClaudeCodeVersion(): string {
-  if (cachedCliVersion !== null) return cachedCliVersion;
-  cachedCliVersion = resolveClaudeCodeVersion() ?? "unknown";
-  return cachedCliVersion;
-}
-
-const MAX_WALK_DEPTH = 6;
-
-function resolveClaudeCodeVersion(): string | null {
-  const execPath = process.env.CLAUDE_CODE_EXECPATH;
-  if (!execPath) return null;
-  let dir = path.dirname(execPath);
-  const root = path.parse(dir).root;
-  for (let i = 0; i < MAX_WALK_DEPTH && dir !== root; i++) {
-    const pkgPath = path.join(dir, "package.json");
-    try {
-      const raw = fs.readFileSync(pkgPath, "utf-8");
-      const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown };
-      if (
-        typeof parsed.name === "string" &&
-        parsed.name.startsWith("@anthropic-ai/claude-code") &&
-        typeof parsed.version === "string"
-      ) {
-        return parsed.version;
-      }
-    } catch {
-      // keep walking
-    }
-    dir = path.dirname(dir);
-  }
-  return null;
+function getCopilotVersion(): string {
+  return process.env.COPILOT_CLI_VERSION || "unknown";
 }
 
 export interface OtlpAttribute {
@@ -86,25 +51,20 @@ const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /**
  * Convert a 26-char Crockford ULID into 32 lowercase hex chars (16 bytes)
- * suitable for an OTLP traceId. Decoding is straightforward because each
- * Crockford char carries 5 bits and 26 chars = 130 bits; we keep the low
- * 128 bits (the spec already pads timestamp+randomness into 128 bits).
+ * suitable for an OTLP traceId.
  */
 export function ulidToTraceId(ulid: string): string {
   if (ulid.length !== 26) {
     throw new Error(`ulidToTraceId: expected 26 chars, got ${ulid.length}`);
   }
-  // Decode to a BigInt then to 16-byte big-endian buffer.
   let n = 0n;
   for (const ch of ulid) {
     const idx = CROCKFORD.indexOf(ch);
     if (idx < 0) throw new Error(`ulidToTraceId: invalid Crockford char "${ch}"`);
     n = (n << 5n) | BigInt(idx);
   }
-  // Mask to 128 bits (drop the top 2 bits of the 130-bit decode).
   const mask = (1n << 128n) - 1n;
   n &= mask;
-  // Render as 32 hex chars, lowercase.
   return n.toString(16).padStart(32, "0");
 }
 
@@ -114,32 +74,34 @@ export function newSpanId(): string {
 }
 
 /**
- * Attribute keys for which redaction (Tier 1) is skipped. Truncation (Tier 3)
- * still applies. These are identifiers, enums, or our own resource attrs that
- * are known-safe and where false-positive masking would hurt more than help.
+ * Identifier/enum keys for which redaction (Tier 1) is skipped (truncation
+ * still applies). Both snake (CLI/ext) and camel (permissionRequest) casings
+ * are listed since Bronze flattening preserves the incoming key name.
  */
 const SKIP_REDACT_KEYS: ReadonlySet<string> = new Set([
-  "cc.hook",
-  "cc.tool_name",
-  "cc.tool_use_id",
-  "cc.session_id",
-  "cc.transcript_path",
-  "cc.cwd",
-  "cc.permission_mode",
+  "copilot.hook",
+  "copilot.tool_name", "copilot.toolName",
+  "copilot.tool_use_id", "copilot.toolUseId",
+  "copilot.session_id", "copilot.sessionId",
+  "copilot.transcript_path", "copilot.transcriptPath",
+  "copilot.cwd",
+  "copilot.permission_mode",
+  "copilot.surface",
+  "copilot.agent_id", "copilot.agent_type",
+  "copilot.agent_name", "copilot.agent_display_name",
+  "copilot.stop_reason", "copilot.notification_type",
+]);
+
+/** Keys that may carry shell command / tool payload text → bash redaction context. */
+const BASH_CONTEXT_KEYS: ReadonlySet<string> = new Set([
+  "copilot.tool_input", "copilot.toolInput",
+  "copilot.tool_response", "copilot.tool_result",
 ]);
 
 function maybeRedactString(key: string, raw: string): string {
-  // Spec §3: truncate first, then redact.
   const truncated = truncate(raw);
   if (SKIP_REDACT_KEYS.has(key)) return truncated;
-  // Bash context only applies when this key may carry shell command text.
-  // flattenEvent emits cc.tool_input as a single JSON-stringified attribute
-  // (no nested flattening today), so strict equality matches actual behavior.
-  // If nested flattening is ever added, re-evaluate to avoid extending bash
-  // context to unrelated nested keys (e.g. cc.tool_input.file_path).
-  const context = key === "cc.tool_input" || key === "cc.tool_response"
-    ? ("bash" as const)
-    : undefined;
+  const context = BASH_CONTEXT_KEYS.has(key) ? ("bash" as const) : undefined;
   return redact(truncated, { context });
 }
 
@@ -165,24 +127,27 @@ function toOtlpValue(key: string, v: unknown): OtlpAttribute["value"] | null {
   }
 }
 
-function snakeCase(hookEventName: string): string {
-  // "PreToolUse" → "pre_tool_use"
-  return hookEventName
+function snakeCase(name: string): string {
+  return name
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
     .toLowerCase();
 }
 
-function flattenEvent(event: BaseEvent): OtlpAttribute[] {
+// Discriminator keys covered by `copilot.hook` — don't re-emit them raw.
+const DISCRIMINATOR_KEYS = new Set(["hook_event_name", "hookEventName", "hookName"]);
+
+function flattenEvent(event: RawEvent, surface: Surface): OtlpAttribute[] {
   const out: OtlpAttribute[] = [];
   // Discriminator first so aware-backend's detectIngestType hits it cheaply.
-  out.push({ key: "ingest.type", value: { stringValue: "cc" } });
-  // Always set cc.hook explicitly so server queries have a canonical key
-  // regardless of incoming field name.
-  out.push({ key: "cc.hook", value: { stringValue: event.hook_event_name } });
+  out.push({ key: "ingest.type", value: { stringValue: "copilot" } });
+  // Canonical hook name regardless of incoming discriminator key (snake/camel/hookName).
+  out.push({ key: "copilot.hook", value: { stringValue: eventName(event) ?? "unknown" } });
+  // Runtime surface label (cli | ext | cloud).
+  out.push({ key: "copilot.surface", value: { stringValue: surface } });
   for (const [k, v] of Object.entries(event)) {
-    if (k === "hook_event_name") continue; // covered by cc.hook above
-    const key = `cc.${k}`;
+    if (DISCRIMINATOR_KEYS.has(k)) continue; // covered by copilot.hook
+    const key = `copilot.${k}`;
     const value = toOtlpValue(key, v);
     if (value === null) continue;
     out.push({ key, value });
@@ -192,11 +157,11 @@ function flattenEvent(event: BaseEvent): OtlpAttribute[] {
 
 function resourceAttrs(): OtlpAttribute[] {
   return [
-    { key: "service.name", value: { stringValue: "claude-code" } },
-    { key: "service.version", value: { stringValue: getClaudeCodeVersion() } },
-    { key: "telemetry.sdk.name", value: { stringValue: "pinta-cc" } },
+    { key: "service.name", value: { stringValue: "copilot" } },
+    { key: "service.version", value: { stringValue: getCopilotVersion() } },
+    { key: "telemetry.sdk.name", value: { stringValue: "pinta-copilot" } },
     { key: "telemetry.sdk.language", value: { stringValue: "nodejs" } },
-    { key: "telemetry.sdk.version", value: { stringValue: PLUGIN_VERSION } },
+    { key: "telemetry.sdk.version", value: { stringValue: SDK_VERSION } },
     { key: "process.pid", value: { intValue: process.pid } },
     { key: "process.owner", value: { stringValue: os.userInfo().username } },
     { key: "host.name", value: { stringValue: os.hostname() } },
@@ -205,30 +170,31 @@ function resourceAttrs(): OtlpAttribute[] {
 }
 
 export function buildOtlpPayload(args: {
-  event: BaseEvent;
+  event: RawEvent;
   traceId: string; // ULID (26 chars)
+  surface: Surface;
   now?: number; // ms since epoch; injectable for tests
   guard?: GuardResult | null;
 }): OtlpPayload {
   const ts = args.now ?? Date.now();
   const tsNano = (BigInt(ts) * 1_000_000n).toString();
-  const attrs = flattenEvent(args.event);
+  const attrs = flattenEvent(args.event, args.surface);
   if (args.guard) {
     attrs.push(
-      { key: 'pinta.guard.decision', value: { stringValue: args.guard.decision.toLowerCase() } },
-      { key: 'pinta.guard.duration_ms', value: { intValue: args.guard.durationMs } },
+      { key: "pinta.guard.decision", value: { stringValue: args.guard.decision.toLowerCase() } },
+      { key: "pinta.guard.duration_ms", value: { intValue: args.guard.durationMs } },
     );
     if (args.guard.reason) {
-      attrs.push({ key: 'pinta.guard.matched_rule', value: { stringValue: args.guard.reason } });
+      attrs.push({ key: "pinta.guard.matched_rule", value: { stringValue: args.guard.reason } });
     }
     if (args.guard.failOpenReason) {
-      attrs.push({ key: 'pinta.guard.fail_open_reason', value: { stringValue: args.guard.failOpenReason } });
+      attrs.push({ key: "pinta.guard.fail_open_reason", value: { stringValue: args.guard.failOpenReason } });
     }
   }
   const span: OtlpSpan = {
     traceId: ulidToTraceId(args.traceId),
     spanId: newSpanId(),
-    name: `cc.${snakeCase(args.event.hook_event_name)}`,
+    name: `copilot.${snakeCase(eventName(args.event) ?? "unknown")}`,
     kind: 1, // SPAN_KIND_INTERNAL
     startTimeUnixNano: tsNano,
     endTimeUnixNano: tsNano,
@@ -240,7 +206,7 @@ export function buildOtlpPayload(args: {
         resource: { attributes: resourceAttrs() },
         scopeSpans: [
           {
-            scope: { name: "pinta-cc", version: PLUGIN_VERSION },
+            scope: { name: "pinta-copilot", version: SDK_VERSION },
             spans: [span],
           },
         ],
@@ -249,11 +215,7 @@ export function buildOtlpPayload(args: {
   };
 }
 
-/**
- * Combine multiple per-hook payloads into a single OTLP payload by
- * concatenating their resourceSpans arrays. aware-backend's parser
- * iterates over resourceSpans natively.
- */
+/** Concatenate per-hook payloads' resourceSpans into one OTLP payload. */
 export function mergeBatch(payloads: OtlpPayload[]): OtlpPayload {
   const out: ResourceSpans[] = [];
   for (const p of payloads) out.push(...p.resourceSpans);

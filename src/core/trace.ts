@@ -7,24 +7,28 @@ const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 function generateUlid(): string {
   const now = Date.now();
-  // 10 chars timestamp (48-bit ms)
   let ts = "";
   let t = now;
   for (let i = 0; i < 10; i++) {
     ts = CROCKFORD[t & 31] + ts;
     t = Math.floor(t / 32);
   }
-  // 16 chars randomness (80-bit)
   const rand = crypto.randomBytes(10);
   let r = "";
-  for (let i = 0; i < 10; i++) {
-    r += CROCKFORD[rand[i] & 31];
-  }
-  // pad to 16 chars
+  for (let i = 0; i < 10; i++) r += CROCKFORD[rand[i] & 31];
   while (r.length < 16) r += CROCKFORD[0];
   return ts + r;
 }
 
+/**
+ * Per-turn trace correlation, keyed by `session_id`.
+ *
+ * `UserPromptSubmit` starts a new ULID trace for its session; subsequent hooks
+ * in the same turn reuse it. Keying by session_id (not a single global file)
+ * is required because CLI and the VS Code extension can run concurrently and
+ * each emits its own session — verified that `session_id` is stable across a
+ * turn on both surfaces (H10). The store is a `{ [sessionId]: traceId }` map.
+ */
 export class TraceManager {
   private tracePath: string;
 
@@ -32,27 +36,42 @@ export class TraceManager {
     this.tracePath = config.tracePath;
   }
 
-  /** UserPromptSubmit 시 새 traceId 생성 및 저장 */
-  newTrace(): string {
+  private readMap(): Record<string, string> {
+    try {
+      const data = JSON.parse(fs.readFileSync(this.tracePath, "utf-8"));
+      // Back-compat: a bare { traceId } file → treat as no sessions.
+      if (data && typeof data === "object" && !("traceId" in data)) {
+        return data as Record<string, string>;
+      }
+    } catch {
+      // no/invalid file
+    }
+    return {};
+  }
+
+  private writeMap(map: Record<string, string>): void {
+    fs.mkdirSync(path.dirname(this.tracePath), { recursive: true });
+    // Cap stored sessions to avoid unbounded growth (keep most recent ~200).
+    const entries = Object.entries(map);
+    const capped = entries.length > 200 ? Object.fromEntries(entries.slice(-200)) : map;
+    fs.writeFileSync(this.tracePath, JSON.stringify(capped));
+  }
+
+  /** Start (and persist) a new trace for this session. */
+  newTrace(sessionId?: string): string {
     const traceId = generateUlid();
-    this.save(traceId);
+    const key = sessionId || "default";
+    const map = this.readMap();
+    map[key] = traceId;
+    this.writeMap(map);
     return traceId;
   }
 
-  /** 현재 traceId 반환. 없으면 새로 생성 */
-  currentTrace(): string {
-    try {
-      const data = fs.readFileSync(this.tracePath, "utf-8");
-      const { traceId } = JSON.parse(data);
-      if (traceId) return traceId;
-    } catch {
-      // no trace file yet
-    }
-    return this.newTrace();
-  }
-
-  private save(traceId: string): void {
-    fs.mkdirSync(path.dirname(this.tracePath), { recursive: true });
-    fs.writeFileSync(this.tracePath, JSON.stringify({ traceId }));
+  /** Current trace for this session; create one if none exists yet. */
+  currentTrace(sessionId?: string): string {
+    const key = sessionId || "default";
+    const existing = this.readMap()[key];
+    if (existing) return existing;
+    return this.newTrace(sessionId);
   }
 }

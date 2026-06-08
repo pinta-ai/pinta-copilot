@@ -1,77 +1,101 @@
-// Load ~/.claude/pinta-cc.env BEFORE any other import that may read process.env.
-// Manager v0.1.6+ writes the env file; v0.1.5 (shell-prefix) still works because
-// loadEnvFile only fills in unset keys. See src/env-file.ts for the migration
-// rationale.
+// Load ~/.copilot/pinta-copilot.env BEFORE any other import that may read
+// process.env. loadEnvFile only fills in unset keys, so explicit env / hook
+// `env` blocks always win (D5).
 import { loadEnvFile } from "./env-file.js";
 loadEnvFile();
 
 import { bridgeUserConfigToOtelEnv } from "./core/env-bridge.js";
 import { loadConfig } from "./core/config.js";
+import { detectSurface } from "./core/surface.js";
 import {
-  isPreToolUseEvent,
-  isPostToolUseEvent,
-  isUserPromptSubmitEvent,
-  isSessionEvent,
-  isSubagentEvent,
-  isStopEvent,
-  isPermissionEvent,
-  isSkippedHook,
+  type RawEvent,
+  classify,
+  isGuardEvent,
+  sessionId as getSessionId,
+  toolName as getToolName,
+  toolInput as getToolInput,
 } from "./core/types.js";
-import type { BaseEvent } from "./core/types.js";
-import { handlePreToolUse } from "./handlers/pre-tool-use.js";
-import { handlePostToolUse } from "./handlers/post-tool-use.js";
-import { handleUserPrompt } from "./handlers/user-prompt.js";
-import { handleSession } from "./handlers/session.js";
-import { handleSubagent } from "./handlers/subagent.js";
-import { handleStop } from "./handlers/stop.js";
-import { handlePermission } from "./handlers/permission.js";
-import { handleDefault } from "./handlers/default.js";
+import { Transport } from "./core/transport.js";
+import { TraceManager } from "./core/trace.js";
+import { buildOtlpPayload } from "./core/otlp.js";
+import { evaluateGuard } from "./core/guard.js";
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
+  for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf-8");
 }
 
 async function main(): Promise<void> {
-  // Bridge CLAUDE_PLUGIN_OPTION_* → OTEL_EXPORTER_OTLP_* FIRST before any other logic.
-  // Explicit OTel env vars take precedence over the bridge.
+  // Bridge plugin-option env (if any) to OTel env. No-op for direct-install.
   bridgeUserConfigToOtelEnv();
 
-  let exitCode = 0;
-
+  // ⚠️ CLI preToolUse hooks are FAIL-CLOSED: a non-zero exit / crash / timeout
+  // DENIES the tool — and a crashing hook bricks the whole agent (report_intent
+  // / ask_user get blocked too, verified §9.6). Therefore this process MUST
+  // exit 0 on every path. All work is wrapped; the catch-all stays exit 0.
   try {
     const config = loadConfig();
+    const surface = detectSurface();
     const raw = await readStdin();
-    const event: BaseEvent = JSON.parse(raw);
+    const event = JSON.parse(raw) as RawEvent;
+    const kind = classify(event);
+    const sid = getSessionId(event);
 
-    if (isSkippedHook(event)) {
-      exitCode = await handleDefault(event);
-    } else if (isPreToolUseEvent(event)) {
-      exitCode = await handlePreToolUse(event, config);
-    } else if (isPostToolUseEvent(event)) {
-      exitCode = await handlePostToolUse(event, config);
-    } else if (isUserPromptSubmitEvent(event)) {
-      exitCode = await handleUserPrompt(event, config);
-    } else if (isSessionEvent(event)) {
-      exitCode = await handleSession(event, config);
-    } else if (isSubagentEvent(event)) {
-      exitCode = await handleSubagent(event, config);
-    } else if (isStopEvent(event)) {
-      exitCode = await handleStop(event, config);
-    } else if (isPermissionEvent(event)) {
-      exitCode = await handlePermission(event, config);
-    } else {
-      exitCode = await handleDefault(event);
+    const transport = new Transport(config);
+    await transport.flush(); // drain retry queue first
+
+    const trace = new TraceManager(config);
+    // UserPromptSubmit starts a new per-turn trace; everything else reuses it.
+    const traceId =
+      kind === "UserPromptSubmit" ? trace.newTrace(sid) : trace.currentTrace(sid);
+
+    // Guard runs on the two tool-gating events (PreToolUse: all surfaces;
+    // PermissionRequest: CLI-only — ext simply never fires it).
+    let guard = null;
+    if (isGuardEvent(kind)) {
+      const ti = getToolInput(event);
+      guard = await evaluateGuard(
+        {
+          spanId: sid ?? "unknown",
+          toolName: getToolName(event),
+          toolInput: ti,
+          rawTextFields: {
+            toolInput: typeof ti === "string" ? ti : JSON.stringify(ti ?? null),
+          },
+        },
+        process.env.PINTA_GUARD_ENDPOINT,
+      );
+    }
+
+    // Telemetry: one span per event (Bronze flattening, copilot.* prefix).
+    const payload = buildOtlpPayload({ event, traceId, surface, guard });
+    await transport.send(payload);
+
+    // Enforcement: emit a deny decision in the format the firing event expects.
+    if (guard?.decision === "DENY") {
+      const reason = guard.userMessage ?? guard.reason ?? "guard_deny";
+      if (kind === "PreToolUse") {
+        process.stdout.write(
+          JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: reason,
+            },
+          }) + "\n",
+        );
+      } else if (kind === "PermissionRequest") {
+        process.stdout.write(
+          JSON.stringify({ behavior: "deny", message: reason }) + "\n",
+        );
+      }
     }
   } catch (err) {
-    process.stderr.write(`[pinta-cc] error: ${err}\n`);
-    exitCode = 0; // top-level catch-all stays fail-open per spec §6
+    process.stderr.write(`[pinta-copilot] error: ${err}\n`);
+    // fail-open by design — never block a tool because the adapter crashed.
   }
-
-  process.exit(exitCode);
+  process.exit(0);
 }
 
 main();

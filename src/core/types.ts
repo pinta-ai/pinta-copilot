@@ -1,114 +1,118 @@
-// --- Claude Code hook event types ---
+// --- GitHub Copilot hook event types (CLI + VS Code extension + cloud) ---
+//
+// One stdin/stdout contract is shared by all three surfaces, but the payload
+// SHAPE differs (verified 2026-06-08, BACKGROUND_RESEARCH §9.6/§9.7):
+//
+//   • CLI  : snake_case, discriminator `hook_event_name`; PostToolUse carries
+//            `tool_result` (structured); NO `tool_use_id`; `transcript_path`
+//            only on Stop; SessionStart has `initial_prompt`; Stop has
+//            `stop_reason`; subagent uses `agent_name`/`agent_display_name`.
+//            permissionRequest is a DIFFERENT schema: camelCase with
+//            discriminator `hookName` + `toolName`/`toolInput`/`permissionSuggestions`.
+//   • ext  : snake_case, `hook_event_name`; Claude-Code-shaped — `tool_response`,
+//            `tool_use_id` present, `transcript_path` on every event, Stop has
+//            `stop_hook_active`, subagent uses `agent_id`/`agent_type`,
+//            SessionStart has `model`. Does NOT fire permissionRequest /
+//            SessionEnd / PostToolUseFailure / ErrorOccurred.
+//
+// Span building uses Bronze flattening (every top-level field → `copilot.<key>`),
+// so we do NOT enumerate every field. We only normalize the handful used for
+// routing / guard / trace, absorbing both casings + both discriminator keys.
 
-export interface BaseEvent {
-  session_id: string;
-  transcript_path: string;
-  cwd: string;
-  permission_mode?: string;
-  hook_event_name: string;
-  // Other hook-specific fields are accessed via flattening; we don't enumerate them.
+export interface RawEvent {
   [key: string]: unknown;
 }
 
-export interface PreToolUseEvent extends BaseEvent {
-  hook_event_name: "PreToolUse";
-  tool_name: string;
-  tool_input: Record<string, unknown>;
-  tool_use_id: string;
+function str(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
 }
 
-export interface PostToolUseEvent extends BaseEvent {
-  hook_event_name: "PostToolUse";
-  tool_name: string;
-  tool_input: Record<string, unknown>;
-  tool_response: unknown;
-  tool_use_id: string;
+/**
+ * Resolve the hook event name across ALL THREE discriminator keys Copilot uses:
+ * `hook_event_name` (CLI/ext snake), `hookEventName` (camelCase variant),
+ * `hookName` (CLI permissionRequest). Verified §9.6.
+ */
+export function eventName(e: RawEvent): string | undefined {
+  return str(e.hook_event_name) ?? str(e.hookEventName) ?? str(e.hookName);
 }
 
-export interface PostToolUseFailureEvent extends BaseEvent {
-  hook_event_name: "PostToolUseFailure";
-  tool_name: string;
-  tool_input: Record<string, unknown>;
-  tool_use_id: string;
-  error?: string;
-  is_interrupt?: boolean;
+/** session id — `session_id` (CLI/ext) or `sessionId` (permissionRequest camel). */
+export function sessionId(e: RawEvent): string | undefined {
+  return str(e.session_id) ?? str(e.sessionId);
 }
 
-export interface UserPromptSubmitEvent extends BaseEvent {
-  hook_event_name: "UserPromptSubmit";
-  prompt: string;
+/** tool name — `tool_name` (snake) or `toolName` (camel/permissionRequest). */
+export function toolName(e: RawEvent): string | undefined {
+  return str(e.tool_name) ?? str(e.toolName);
 }
 
-export interface SessionEvent extends BaseEvent {
-  hook_event_name: "SessionStart" | "SessionEnd";
+/** tool input — `tool_input` (snake) / `toolArgs` / `toolInput` (camel). */
+export function toolInput(e: RawEvent): unknown {
+  return e.tool_input ?? e.toolArgs ?? e.toolInput;
 }
 
-export interface SubagentEvent extends BaseEvent {
-  hook_event_name: "SubagentStart" | "SubagentStop";
-  agent_id?: string;
-  agent_type?: string;
+// --- Event classification (normalized, case-insensitive) ---
+
+export type EventKind =
+  | "SessionStart"
+  | "SessionEnd"
+  | "UserPromptSubmit"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "PostToolUseFailure"
+  | "Stop"
+  | "SubagentStart"
+  | "SubagentStop"
+  | "PreCompact"
+  | "Notification"
+  | "PermissionRequest"
+  | "ErrorOccurred"
+  | "Unknown";
+
+const KIND_MAP: Record<string, EventKind> = {
+  sessionstart: "SessionStart",
+  sessionend: "SessionEnd",
+  userpromptsubmit: "UserPromptSubmit",
+  userpromptsubmitted: "UserPromptSubmit",
+  pretooluse: "PreToolUse",
+  posttooluse: "PostToolUse",
+  posttoolusefailure: "PostToolUseFailure",
+  stop: "Stop",
+  agentstop: "Stop",
+  subagentstart: "SubagentStart",
+  subagentstop: "SubagentStop",
+  precompact: "PreCompact",
+  notification: "Notification",
+  permissionrequest: "PermissionRequest",
+  erroroccurred: "ErrorOccurred",
+};
+
+export function classify(e: RawEvent): EventKind {
+  const n = eventName(e);
+  if (!n) return "Unknown";
+  return KIND_MAP[n.toLowerCase()] ?? "Unknown";
 }
 
-export interface StopEvent extends BaseEvent {
-  hook_event_name: "Stop";
-  stop_hook_active?: boolean;
+/** Guard runs on the two tool-gating events. PreToolUse fires on all surfaces;
+ *  PermissionRequest is CLI-only (ext has no such event → entry is ignored). */
+export function isGuardEvent(kind: EventKind): boolean {
+  return kind === "PreToolUse" || kind === "PermissionRequest";
 }
 
-export interface PermissionEvent extends BaseEvent {
-  hook_event_name: "PermissionRequest" | "PermissionDenied";
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-}
+// --- Hook deny output formats (one per gating event) ---
 
-// --- Type guards ---
-
-export function isPreToolUseEvent(event: BaseEvent): event is PreToolUseEvent {
-  return event.hook_event_name === "PreToolUse";
-}
-
-export function isPostToolUseEvent(
-  event: BaseEvent,
-): event is PostToolUseEvent | PostToolUseFailureEvent {
-  return (
-    event.hook_event_name === "PostToolUse" || event.hook_event_name === "PostToolUseFailure"
-  );
-}
-
-export function isUserPromptSubmitEvent(event: BaseEvent): event is UserPromptSubmitEvent {
-  return event.hook_event_name === "UserPromptSubmit";
-}
-
-export function isSessionEvent(event: BaseEvent): event is SessionEvent {
-  return event.hook_event_name === "SessionStart" || event.hook_event_name === "SessionEnd";
-}
-
-export function isSubagentEvent(event: BaseEvent): event is SubagentEvent {
-  return event.hook_event_name === "SubagentStart" || event.hook_event_name === "SubagentStop";
-}
-
-export function isStopEvent(event: BaseEvent): event is StopEvent {
-  return event.hook_event_name === "Stop";
-}
-
-export function isPermissionEvent(event: BaseEvent): event is PermissionEvent {
-  return (
-    event.hook_event_name === "PermissionRequest" || event.hook_event_name === "PermissionDenied"
-  );
-}
-
-// --- Skip-list (route to default no-op handler) ---
-
-const SKIP_HOOKS = new Set(["Notification", "TaskCreated", "TaskCompleted"]);
-export function isSkippedHook(event: BaseEvent): boolean {
-  return SKIP_HOOKS.has(event.hook_event_name);
-}
-
-// --- Hook output types ---
-
-export interface HookBlockOutput {
+/** preToolUse decision-control — honored by CLI, ext, and cloud. */
+export interface PreToolUseDenyOutput {
   hookSpecificOutput: {
     hookEventName: "PreToolUse";
     permissionDecision: "deny";
     permissionDecisionReason: string;
   };
+}
+
+/** permissionRequest decision-control — CLI permission service only. */
+export interface PermissionRequestDenyOutput {
+  behavior: "deny";
+  message: string;
+  interrupt?: boolean;
 }

@@ -1,200 +1,116 @@
-# pinta-cc — Generic OTLP forwarder for Claude Code hook events
+# pinta-copilot — OTLP forwarder + guard for GitHub Copilot hooks
 
-Converts Claude Code hook events into OTLP/HTTP spans and forwards them to any OpenTelemetry-compatible collector. No Pinta CLI dependency. No identity check at plugin time. Vendor-neutral.
+Converts **GitHub Copilot** hook events into OTLP/HTTP spans and forwards them to any OpenTelemetry-compatible collector, with an optional external **guard** that can allow/deny tool calls. Vendor-neutral. No Pinta CLI dependency. Identity is attached at the relay layer.
 
-## Features
+A **single adapter + a single hook file** covers two surfaces:
 
-- **OTLP transport**: converts 11 hook event types into OTLP/HTTP `resourceSpans` and sends them via `POST {endpoint}/traces`
-- **Bronze flattening**: every top-level field of a hook event is flattened into `cc.<key>` span attributes
-- **ULID per-turn traceId**: `UserPromptSubmit` starts a new ULID-based trace; all subsequent hooks in the same turn share it
-- **Retry queue**: on transport failure, payloads are appended to `.plugin-data/failed-spans.jsonl` (cap 1000) and flushed on the next hook invocation
-- **Vendor-neutral**: any OTel-compatible collector works. Pinta Manager auto-configures the endpoint and token
-- **Identity at relay**: `member.identity.*` attributes are no longer attached at plugin time. Pinta Manager (or your own pipeline) attaches identity at the forwarding layer
+| Surface | Hook source | Guard | Notes |
+|---|---|---|---|
+| **Copilot CLI** | `~/.copilot/hooks/pinta-copilot.json` | `preToolUse` **+** `permissionRequest` | `preToolUse` is **fail-closed** |
+| **VS Code extension** (in-editor Copilot Chat) | same `~/.copilot/hooks/` file | `preToolUse` | `preToolUse` is fail-open |
 
-## Channels
+> Cloud agent (`.github/hooks/`) is out of scope for now.
 
-| Channel | Install path | Auto-update |
-|---------|-------------|-------------|
-| **Pinta Manager v0.2+** | Manager installs and configures automatically | Yes — on manager reconcile |
-| **Marketplace `pinta-cc@pinta-ai`** | `/plugin marketplace add awarecorp/pinta-cc` then `/plugin install pinta-cc@pinta-ai` | Yes — on Claude Code startup |
+## Why it works with no VS Code setup
 
-## Installation
+The VS Code Copilot extension reads the **same** `~/.copilot/hooks/` file the CLI does (VS Code core `DEFAULT_HOOK_FILE_PATHS`). **No VS Code setting is required** — in particular `chat.useClaudeHooks` works at its default `false`. Install the one file and both the CLI and in-editor Copilot Chat fire it. (Verified against Copilot CLI 1.0.49 + VS Code, 2026-06.)
 
-### Pinta Manager (recommended for enterprise)
+## ⚠️ Fail-closed safety
 
-Pinta Manager v0.2+ handles installation and configuration automatically. No manual steps required.
+Copilot's **CLI `preToolUse` hook is fail-closed**: a non-zero exit, crash, or timeout *denies* the tool — and a crashing hook blocks `report_intent`/`ask_user` too, bricking the whole agent turn. This adapter therefore **always exits 0** on every path; transport and guard failures are absorbed (telemetry fail-open). Do not patch in code paths that can throw past the top-level handler.
 
-### Marketplace
+## Install
 
 ```bash
-/plugin marketplace add awarecorp/pinta-cc
-/plugin install pinta-cc@pinta-ai
-```
-
-After installation, Claude Code automatically pulls new versions from the marketplace on every startup.
-
-### Direct from GitHub
-
-```bash
-claude plugin install github:awarecorp/pinta-cc
-```
-
-### Local development
-
-```bash
-git clone https://github.com/awarecorp/pinta-cc.git
-cd pinta-cc
+git clone https://github.com/awarecorp/pinta-copilot.git
+cd pinta-copilot
 npm install && npm run build
-claude --plugin-dir .
+npm run install-hooks        # writes ~/.copilot/hooks/pinta-copilot.json (absolute paths)
 ```
+
+Restart the Copilot CLI / reload the VS Code window to load hooks. Remove with `npm run uninstall-hooks`.
+
+> Managed installs (Pinta Manager) write the same file via the sidecar enroll module — no manual step.
 
 ## Configuration
 
-### userConfig (Claude Code plugin settings)
+Config is read from an **env file** the adapter loads at startup — `~/.copilot/pinta-copilot.env` (or `$COPILOT_HOME/pinta-copilot.env`), `KEY=VALUE` per line. Explicit `process.env` (incl. a hook `env` block) overrides the file; the file overrides legacy keys.
 
-| Setting | Description | Required |
-|---------|-------------|----------|
-| `endpoint` | OTLP/HTTP traces endpoint. Pinta Manager auto-fills. OSS: any OTel collector URL | Yes |
-| `api_key` | Token sent as `x-pinta-relay-token` header. Pinta Manager auto-fills | Conditional |
-
-### Pinta Manager scenario
-
-Pinta Manager v0.2+ injects `CLAUDE_PLUGIN_OPTION_ENDPOINT` and `CLAUDE_PLUGIN_OPTION_API_KEY` automatically via Claude Code's `settings.json`. No manual configuration needed.
-
-### OSS / direct scenario
-
-Set `endpoint` to your OTLP collector URL (e.g. `http://localhost:4318`) and `api_key` to whatever token your collector expects. The token is sent as `x-pinta-relay-token`.
-
-For collectors that need a different auth header, set `OTEL_EXPORTER_OTLP_HEADERS` directly in your environment — this overrides the `api_key` userConfig:
-
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com
-export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"
+```env
+# ~/.copilot/pinta-copilot.env
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://your-collector.example.com/v1/traces
+OTEL_EXPORTER_OTLP_HEADERS=x-pinta-relay-token=YOUR-TOKEN
+# optional: external guard (allow/deny tool calls)
+PINTA_GUARD_ENDPOINT=https://your-relay.example.com/guard
 ```
 
-### OTel env var precedence
+| Var | Purpose |
+|---|---|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full OTLP/HTTP traces URL (no append). `OTEL_EXPORTER_OTLP_ENDPOINT` is also accepted as a base URL (`/v1/traces` appended). |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `key=val,key=val` request headers (auth). |
+| `PINTA_GUARD_ENDPOINT` | Optional. POST'd on `preToolUse`/`permissionRequest`; a `DENY` response blocks the tool. |
+| `COPILOT_HOME` | Overrides `~/.copilot` for hook + env-file paths. |
 
-The plugin reads OTel env vars directly. `CLAUDE_PLUGIN_OPTION_*` env vars (set by Claude Code from userConfig) are bridged to their `OTEL_EXPORTER_OTLP_*` equivalents **only when the OTel var is not already set**. Explicit `OTEL_EXPORTER_OTLP_*` always win.
+## Guard (allow / deny + reason)
 
-| Plugin userConfig | Bridged to |
-|------------------|-|
-| `CLAUDE_PLUGIN_OPTION_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` |
-| `CLAUDE_PLUGIN_OPTION_API_KEY` | `OTEL_EXPORTER_OTLP_HEADERS=x-pinta-relay-token=<key>` |
+On `preToolUse` (all surfaces) and `permissionRequest` (CLI only) the adapter queries `PINTA_GUARD_ENDPOINT`. A `DENY` is emitted in the surface-appropriate format and the reason is shown to the model/user:
 
-## Span attribute conventions
+- `preToolUse` → `{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<reason>" } }`
+- `permissionRequest` → `{ "behavior": "deny", "message": "<reason>" }`
 
-### Resource attributes
+Guard is **fail-open** (no endpoint / timeout / error → allow), so it never breaks a session.
 
-| Attribute | Value |
-|-----------|-------|
-| `service.name` | `"claude-code"` |
-| `service.version` | Claude Code CLI version |
-| `telemetry.sdk.name` | `"pinta-cc"` |
-| `telemetry.sdk.version` | Plugin version |
-| `process.pid` | Hook process PID |
-| `process.owner` | OS username |
-| `host.name` | Machine hostname |
-| `host.arch` | CPU architecture |
-
-Note: `member.identity.*` attributes are **not** attached at plugin time (moved to relay layer).
-
-### Span attributes
+## Span conventions
 
 | Attribute | Value |
-|-----------|-------|
-| `ingest.type` | `"cc"` (discriminator for aware-backend parser) |
-| `cc.hook` | Hook event name (e.g. `PreToolUse`) |
-| `cc.<key>` | All other top-level hook event fields (Bronze flattening) |
+|---|---|
+| `ingest.type` | `"copilot"` (aware-backend discriminator) |
+| `copilot.hook` | Hook event name (resolved from `hook_event_name` / `hookEventName` / `hookName`) |
+| `copilot.surface` | `cli` \| `ext` \| `cloud` (runtime-detected) |
+| `copilot.<key>` | Every other top-level field (Bronze flattening, raw key preserved) |
+| `service.name` | `"copilot"` · `telemetry.sdk.name` `"pinta-copilot"` |
+
+### CLI ↔ ext payload differences (absorbed by the adapter)
+
+| | CLI | ext |
+|---|---|---|
+| discriminator | `hook_event_name` (snake); `permissionRequest` uses `hookName` (camel) | `hook_event_name` (snake) |
+| tool result | `tool_result` (structured) | `tool_response` (Claude-style) |
+| `tool_use_id` | absent | present |
+| `transcript_path` | Stop only | every event |
+| subagent id | `agent_name`/`agent_display_name` | `agent_id`/`agent_type` |
+| `permissionRequest` | fires | not fired |
+
+Bronze flattening passes both shapes through losslessly; the backend's `CopilotIngestData` normalizes (`tool_response ?? tool_result`, `agent_id ?? agent_name`, …).
 
 ## Architecture
 
 ```
 src/
-├── index.ts              # Entry point: env-bridge → stdin parse → handler routing
+├── index.ts              # stdin → classify → trace → guard → span → exit 0 (always)
+├── env-file.ts           # ~/.copilot/pinta-copilot.env loader (unset-only)
 ├── core/
-│   ├── env-bridge.ts     # CLAUDE_PLUGIN_OPTION_* → OTEL_EXPORTER_OTLP_* alias
-│   ├── types.ts          # Hook event types, type guards, skip-list
-│   ├── config.ts         # loadConfig() + hasOtlpEndpoint()
-│   ├── otlp.ts           # OTLP payload builder + Bronze flattening + ULID→traceId
-│   ├── transport.ts      # POST {endpoint}/traces (5s timeout, reads OTel env at call time)
-│   ├── retry-queue.ts    # File-based JSONL queue (cap 1000, 30s stale lock TTL)
-│   ├── trace.ts          # traceId management (ULID, file-based sharing)
-│   ├── identity.ts       # Empty stub (identity attribution moved to relay)
-│   └── redact.ts         # Tier-1 redaction + Tier-3 truncation
-└── handlers/
-    ├── pre-tool-use.ts   # flush → currentTrace → buildOtlpPayload → send → exit 0
-    ├── post-tool-use.ts
-    ├── user-prompt.ts    # flush → newTrace → buildOtlpPayload → send → exit 0
-    ├── session.ts
-    ├── subagent.ts
-    ├── stop.ts
-    ├── permission.ts
-    └── default.ts        # Notification, TaskCreated, TaskCompleted → exit 0 immediately
+│   ├── types.ts          # 3-way discriminator + snake/camel field absorption + classify
+│   ├── surface.ts        # cli | cloud | ext detection (ELECTRON_RUN_AS_NODE, …; NOT TERM_PROGRAM)
+│   ├── otlp.ts           # Bronze flattening (copilot.*) + ingest.type + surface + guard attrs
+│   ├── trace.ts          # per-turn ULID trace, keyed by session_id
+│   ├── transport.ts      # POST OTLP/HTTP traces (reads OTel env at call time)
+│   ├── retry-queue.ts    # file-backed JSONL queue, flushed next invocation
+│   ├── guard.ts          # POST PINTA_GUARD_ENDPOINT (50ms), fail-open
+│   ├── redact.ts         # Tier-1 redaction + Tier-3 truncation
+│   ├── config.ts / env-bridge.ts
+└── tools/install-hooks.ts  # write/remove ~/.copilot/hooks/pinta-copilot.json
 ```
-
-## Event flow
-
-```
-UserPromptSubmit (newTrace() → POST /traces)
-  → PreToolUse (currentTrace() → POST /traces)
-  → PostToolUse (currentTrace() → POST /traces)
-  → ...
-UserPromptSubmit (next turn, new traceId)
-  → ...
-```
-
-Each hook invocation spawns a fresh Node process. One hook = one OTLP span = one `resourceSpans` entry. Retry queue flush batches multiple spans into a single body.
-
-## Captured events (11)
-
-PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd, PermissionRequest, PermissionDenied, SubagentStart, SubagentStop, Stop
-
-## Skipped events (3, exit 0 immediately)
-
-Notification, TaskCreated, TaskCompleted
 
 ## Development
 
 ```bash
 npm install
 npm run build         # tsc → dist/
-npm test              # vitest run
-npm run mock-server   # Generic OTLP collector at http://localhost:3000
+npm test              # vitest
+npm run mock-server   # local OTLP collector
 ```
-
-### Local integration test
-
-```bash
-# Terminal 1: start the mock OTLP collector
-npm run mock-server
-
-# Terminal 2: run Claude Code with the plugin
-CLAUDE_PLUGIN_OPTION_ENDPOINT=http://localhost:3000 \
-CLAUDE_PLUGIN_OPTION_API_KEY=test-token \
-claude --plugin-dir .
-```
-
-Open `http://localhost:3000` to inspect captured spans.
-
-## BREAKING CHANGES from 1.1.x
-
-| What changed | 1.1.x | 1.2.x | Migration |
-|---|---|---|---|
-| Pinta CLI dependency | Required (`pinta login`) | Removed | Nothing; Pinta Manager or direct OTel env |
-| `endpoint` meaning | Pinta backend URL | Any OTLP collector URL | Update to your collector's `/v1/traces` or equivalent |
-| `api_key` meaning | Pinta backend API key (`x-api-key` header) | Relay token (`x-pinta-relay-token` header) | Pinta Manager: automatic. Standalone: update token |
-| Identity attributes | `member.identity.id/email` in resource attrs | Removed | Attach at your collector/forwarder layer |
-| PreToolUse fail-close | Exit 2 (deny) when identity unresolved | Removed — always exit 0 | No action needed |
-| `src/enterprise/` | Present | Removed | No action needed |
-
-**Pinta Manager users:** No action required. Manager v0.2 auto-injects config on next reconcile.
-
-**Marketplace users:** Auto-updated on next Claude Code startup. Update `endpoint` userConfig to your OTLP collector URL if you manage your own pipeline.
-
-**Direct env var users:** Replace `CLAUDE_PLUGIN_OPTION_API_KEY` token semantics and ensure your collector accepts `x-pinta-relay-token`, or set `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <token>` directly.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — see [LICENSE](LICENSE).
-
-Commercial use is **not permitted** under this license. Noncommercial use (personal projects, research, educational institutions, nonprofits, government) is allowed. For a commercial license, please contact Pinta AI.
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) — see [LICENSE](LICENSE). Commercial use is not permitted; contact Pinta AI for a commercial license.

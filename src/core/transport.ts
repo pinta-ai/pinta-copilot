@@ -109,14 +109,14 @@ export class Transport {
                 ? " — collector may be down"
                 : "";
         process.stderr.write(
-          `[pinta-cc] OTLP POST ${res.status} ${opts.endpoint}${hint}${body ? ` body=${body}` : ""}\n`,
+          `[pinta-copilot] OTLP POST ${res.status} ${opts.endpoint}${hint}${body ? ` body=${body}` : ""}\n`,
         );
         return false;
       }
       return true;
     } catch (err) {
       process.stderr.write(
-        `[pinta-cc] OTLP POST failed: ${(err as Error).message ?? String(err)}\n`,
+        `[pinta-copilot] OTLP POST failed: ${(err as Error).message ?? String(err)}\n`,
       );
       return false;
     } finally {
