@@ -50,8 +50,10 @@ See [`DESIGNDOC.md`](./DESIGNDOC.md) for the full design.
 ### Removed (pinta-cc / Claude residue)
 
 - `env-bridge.ts` (`CLAUDE_PLUGIN_OPTION_*` → OTel bridge) — plugin-channel only,
-  unused for direct install. Config now comes purely from the env file; the
-  guard relay token is read from `PINTA_RELAY_TOKEN`.
+  unused for direct install. Config now comes from the env file via
+  **namespaced vars** `COPILOT_PLUGIN_OPTION_ENDPOINT` / `COPILOT_PLUGIN_OPTION_HEADERS`
+  (so they don't collide with Copilot's native OTel `OTEL_EXPORTER_OTLP_*`, which
+  remain a lower-priority fallback); the guard relay token is `PINTA_RELAY_TOKEN`.
 - Dead `hasOtlpEndpoint()`, the `CLAUDE_PLUGIN_DATA` fallback, the unused
   `identity.ts` stub, and stale `[pinta-cc]` log branding / Claude-referencing
   comments.

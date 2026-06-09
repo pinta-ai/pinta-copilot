@@ -6,8 +6,8 @@ import { loadEnvFile, parseEnvFile } from "../src/env-file";
 
 const SAVED = { ...process.env };
 const TEST_KEYS = [
-  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_HEADERS",
+  "COPILOT_PLUGIN_OPTION_ENDPOINT",
+  "COPILOT_PLUGIN_OPTION_HEADERS",
   "PINTA_RELAY_TOKEN",
   "PINTA_GUARD_ENDPOINT",
   "PINTA_TEST_ALPHA",
@@ -56,8 +56,8 @@ describe("loadEnvFile", () => {
     fs.writeFileSync(
       file,
       [
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces",
-        "OTEL_EXPORTER_OTLP_HEADERS=x-pinta-relay-token=token-abc",
+        "COPILOT_PLUGIN_OPTION_ENDPOINT=http://127.0.0.1:4318/v1/traces",
+        "COPILOT_PLUGIN_OPTION_HEADERS=x-pinta-relay-token=token-abc",
         "PINTA_GUARD_ENDPOINT=http://127.0.0.1:4318/guard/evaluate",
         "PINTA_RELAY_TOKEN=token-abc",
       ].join("\n"),
@@ -65,10 +65,10 @@ describe("loadEnvFile", () => {
 
     loadEnvFile(file);
 
-    expect(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
+    expect(process.env.COPILOT_PLUGIN_OPTION_ENDPOINT).toBe(
       "http://127.0.0.1:4318/v1/traces",
     );
-    expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBe("x-pinta-relay-token=token-abc");
+    expect(process.env.COPILOT_PLUGIN_OPTION_HEADERS).toBe("x-pinta-relay-token=token-abc");
     expect(process.env.PINTA_GUARD_ENDPOINT).toBe(
       "http://127.0.0.1:4318/guard/evaluate",
     );
@@ -85,7 +85,7 @@ describe("loadEnvFile", () => {
     // process.env entries we set before the call survive untouched.
     expect(process.env.PINTA_TEST_ALPHA).toBe("from-shell-prefix");
     // No accidental population of any of our test keys.
-    expect(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBeUndefined();
+    expect(process.env.COPILOT_PLUGIN_OPTION_ENDPOINT).toBeUndefined();
     expect(process.env.PINTA_RELAY_TOKEN).toBeUndefined();
   });
 

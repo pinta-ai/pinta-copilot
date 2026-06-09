@@ -38,16 +38,16 @@ Config is read from an **env file** the adapter loads at startup — `~/.copilot
 
 ```env
 # ~/.copilot/pinta-copilot.env
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://your-collector.example.com/v1/traces
-OTEL_EXPORTER_OTLP_HEADERS=x-pinta-relay-token=YOUR-TOKEN
+COPILOT_PLUGIN_OPTION_ENDPOINT=https://your-collector.example.com/v1/traces
+COPILOT_PLUGIN_OPTION_HEADERS=x-pinta-relay-token=YOUR-TOKEN
 # optional: external guard (allow/deny tool calls)
 PINTA_GUARD_ENDPOINT=https://your-relay.example.com/guard
 ```
 
 | Var | Purpose |
 |---|---|
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Full OTLP/HTTP traces URL (no append). `OTEL_EXPORTER_OTLP_ENDPOINT` is also accepted as a base URL (`/v1/traces` appended). |
-| `OTEL_EXPORTER_OTLP_HEADERS` | `key=val,key=val` request headers (auth). |
+| `COPILOT_PLUGIN_OPTION_ENDPOINT` | Full OTLP/HTTP traces URL. **Namespaced to avoid colliding with Copilot's native OTel** (`OTEL_EXPORTER_OTLP_*`). The standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` are honored as a lower-priority fallback. |
+| `COPILOT_PLUGIN_OPTION_HEADERS` | `key=val,key=val` request headers (auth). Falls back to `OTEL_EXPORTER_OTLP_HEADERS`. |
 | `PINTA_GUARD_ENDPOINT` | Optional. POST'd on `preToolUse`/`permissionRequest`; a `DENY` response blocks the tool. |
 | `COPILOT_HOME` | Overrides `~/.copilot` for hook + env-file paths. |
 

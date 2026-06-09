@@ -52,7 +52,7 @@ function run(stdin: string): Promise<{ code: number | null; stdout: string }> {
         ...process.env,
         COPILOT_HOME: tmpHome, // isolate from the real ~/.copilot env file
         COPILOT_PLUGIN_DATA: path.join(tmpHome, "data"),
-        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: `http://127.0.0.1:${port}/v1/traces`,
+        COPILOT_PLUGIN_OPTION_ENDPOINT: `http://127.0.0.1:${port}/v1/traces`,
         PINTA_GUARD_ENDPOINT: `http://127.0.0.1:${port}/guard`,
         PINTA_GUARD_TIMEOUT_MS: "2000",
       },

@@ -115,7 +115,7 @@ Both gates are registered; each surface fires only the ones it supports (ext sil
 
 - **Bronze flattening**: every top-level event field becomes a `copilot.<key>` span attribute (raw key preserved, objects JSON-stringified). Plus `ingest.type="copilot"`, `copilot.hook` (canonical name), `copilot.surface`. Resource: `service.name="copilot"`, `telemetry.sdk.name="pinta-copilot"`. Identity is attached at the relay, not here.
 - **Trace correlation**: `UserPromptSubmit` starts a new ULID trace; later hooks reuse it. The store is keyed by `session_id` (a `{ [sessionId]: traceId }` map) so concurrent CLI + ext sessions don't collide.
-- **Transport**: `POST {OTEL_EXPORTER_OTLP_TRACES_ENDPOINT}` (full URL) or `{…_ENDPOINT}/v1/traces`. Headers from `OTEL_EXPORTER_OTLP_HEADERS`.
+- **Transport**: `POST {COPILOT_PLUGIN_OPTION_ENDPOINT}` (full URL). Headers from `COPILOT_PLUGIN_OPTION_HEADERS`. These config vars are **namespaced to avoid colliding with Copilot's own native OTel** (which reads `OTEL_EXPORTER_OTLP_*`); the standard `OTEL_EXPORTER_OTLP_*` names are honored as a lower-priority OSS fallback.
 - **Retry queue**: transport failures are appended to a file-backed JSONL queue and flushed (batched via `mergeBatch`) on the next invocation.
 
 ---
@@ -134,11 +134,13 @@ The Copilot **CLI `preToolUse` hook is fail-closed**: a non-zero exit, crash, or
 The adaptor loads `~/.copilot/pinta-copilot.env` (or `$COPILOT_HOME/pinta-copilot.env`) at startup, filling only unset keys. Precedence: explicit `process.env` (incl. a hook `env` block) > env file > legacy. There is no plugin `userConfig` and no `CLAUDE_PLUGIN_OPTION_*` bridge — those were removed as Claude-only residue.
 
 ```env
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com/v1/traces
-OTEL_EXPORTER_OTLP_HEADERS=x-pinta-relay-token=YOUR-TOKEN
+COPILOT_PLUGIN_OPTION_ENDPOINT=https://collector.example.com/v1/traces
+COPILOT_PLUGIN_OPTION_HEADERS=x-pinta-relay-token=YOUR-TOKEN
 PINTA_GUARD_ENDPOINT=https://relay.example.com/guard/evaluate   # optional
 PINTA_RELAY_TOKEN=YOUR-TOKEN                                    # guard auth header
 ```
+
+> Config vars are **namespaced** (`COPILOT_PLUGIN_OPTION_*`) so they don't collide with Copilot's native OTel feature, which reads `OTEL_EXPORTER_OTLP_*`. The standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_HEADERS` are still accepted as a lower-priority fallback for OSS users.
 
 ### Install — direct hook file (D4)
 `npm run install-hooks` writes `~/.copilot/hooks/pinta-copilot.json`: every event registered to `node <abs>/dist/index.js`, each entry carrying `env: { PINTA_COPILOT_EVENT: "<EventName>" }`. Absolute paths are baked in (user-level hooks don't get `${COPILOT_PLUGIN_ROOT}`). The plugin-manifest auto-discovery channel is intentionally unused. `npm run doctor` is a read-only health check (hook file, env, endpoint, surface). One file serves both CLI and the VS Code extension.
