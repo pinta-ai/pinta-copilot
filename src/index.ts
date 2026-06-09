@@ -4,7 +4,6 @@
 import { loadEnvFile } from "./env-file.js";
 loadEnvFile();
 
-import { bridgeUserConfigToOtelEnv } from "./core/env-bridge.js";
 import { loadConfig } from "./core/config.js";
 import { detectSurface } from "./core/surface.js";
 import {
@@ -29,9 +28,6 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  // Bridge plugin-option env (if any) to OTel env. No-op for direct-install.
-  bridgeUserConfigToOtelEnv();
-
   // ⚠️ CLI preToolUse hooks are FAIL-CLOSED: a non-zero exit / crash / timeout
   // DENIES the tool — and a crashing hook bricks the whole agent (report_intent
   // / ask_user get blocked too, verified §9.6). Therefore this process MUST

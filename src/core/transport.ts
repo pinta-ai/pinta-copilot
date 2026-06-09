@@ -22,10 +22,8 @@ function parseHeadersEnv(raw: string | undefined): Record<string, string> {
 
 function getOptions(): TransportOptions | null {
   // OTLP/HTTP spec: TRACES_ENDPOINT is the full URL (no append by exporter);
-  // ENDPOINT is a base URL the SDK appends /v1/traces to. We treat the
-  // value as a full URL — env-bridge maps CLAUDE_PLUGIN_OPTION_ENDPOINT to
-  // TRACES_ENDPOINT specifically. For OSS users who set ENDPOINT directly,
-  // assume base URL and append /v1/traces.
+  // ENDPOINT is a base URL to which we append /v1/traces. The env file sets
+  // TRACES_ENDPOINT directly; ENDPOINT is the OSS base-URL fallback.
   const tracesEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
   const baseEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   let endpoint: string | undefined;
