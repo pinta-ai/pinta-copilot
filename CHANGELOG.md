@@ -2,10 +2,12 @@
 
 All notable changes to pinta-copilot are documented here.
 
-## [0.1.0] - 2026-06-08
+## [0.1.0] - 2026-06-09
 
 Initial release. Forked from `pinta-cc` (Claude Code adapter); core layer
-(otlp/transport/retry-queue/redact/guard) reused.
+(otlp/transport/retry-queue/redact/guard) reused. Verified against real
+GitHub Copilot CLI 1.0.49 + VS Code extension and a live Pinta Manager guard.
+See [`DESIGNDOC.md`](./DESIGNDOC.md) for the full design.
 
 ### Added
 
@@ -13,9 +15,16 @@ Initial release. Forked from `pinta-cc` (Claude Code adapter); core layer
   Copilot CLI and the VS Code extension (in-editor Copilot Chat). A single
   `~/.copilot/hooks/pinta-copilot.json` fires on both; **no VS Code setting
   required** (`chat.useClaudeHooks` default `false` works).
-- **3-way event discriminator** — resolves the hook name from
-  `hook_event_name` / `hookEventName` / `hookName` (CLI `permissionRequest`
-  uses a camelCase `hookName` schema).
+- **3-way event discriminator + env fallback** — resolves the hook name from
+  `hook_event_name` / `hookEventName` / `hookName`, then `PINTA_COPILOT_EVENT`
+  (CLI `permissionRequest` uses a camelCase `hookName` schema; CLI
+  `subagentStart` ships no event-name field at all, so `install-hooks` stamps
+  the event name into each hook entry's `env`).
+- **Internal tools are telemetry-only** — `report_intent` / `ask_user` are
+  never guarded (denying them would brick the turn); `PINTA_GUARD_TIMEOUT_MS`
+  makes the guard client timeout configurable (default 50ms).
+- **`doctor`** — read-only health check (hook file, env, endpoint, surface).
+- **`DESIGNDOC.md`** — the as-built design document.
 - **Surface detection** (`copilot.surface` = `cli` | `ext` | `cloud`) via
   `ELECTRON_RUN_AS_NODE` / `VSCODE_*` / `COPILOT_AGENT_*` — deliberately not
   `TERM_PROGRAM` (integrated-terminal CLI would misclassify).
@@ -37,3 +46,12 @@ Initial release. Forked from `pinta-cc` (Claude Code adapter); core layer
 - Plugin/marketplace channel removed (direct hook-file install only).
 - Handlers consolidated into `index.ts`; config data dir anchored at
   `~/.copilot/pinta-copilot-data` (cwd-independent).
+
+### Removed (pinta-cc / Claude residue)
+
+- `env-bridge.ts` (`CLAUDE_PLUGIN_OPTION_*` → OTel bridge) — plugin-channel only,
+  unused for direct install. Config now comes purely from the env file; the
+  guard relay token is read from `PINTA_RELAY_TOKEN`.
+- Dead `hasOtlpEndpoint()`, the `CLAUDE_PLUGIN_DATA` fallback, the unused
+  `identity.ts` stub, and stale `[pinta-cc]` log branding / Claude-referencing
+  comments.

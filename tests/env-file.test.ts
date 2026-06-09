@@ -6,9 +6,9 @@ import { loadEnvFile, parseEnvFile } from "../src/env-file";
 
 const SAVED = { ...process.env };
 const TEST_KEYS = [
-  "CLAUDE_PLUGIN_OPTION_ENDPOINT",
-  "CLAUDE_PLUGIN_OPTION_API_KEY",
-  "CLAUDE_PLUGIN_ROOT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "PINTA_RELAY_TOKEN",
   "PINTA_GUARD_ENDPOINT",
   "PINTA_TEST_ALPHA",
   "PINTA_TEST_BETA",
@@ -16,7 +16,7 @@ const TEST_KEYS = [
 ];
 
 function makeTmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "pinta-cc-env-file-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "pinta-copilot-env-file-"));
 }
 
 describe("parseEnvFile", () => {
@@ -52,27 +52,27 @@ describe("loadEnvFile", () => {
 
   it("populates process.env when the file exists", () => {
     const dir = makeTmpDir();
-    const file = path.join(dir, "pinta-cc.env");
+    const file = path.join(dir, "pinta-copilot.env");
     fs.writeFileSync(
       file,
       [
-        "CLAUDE_PLUGIN_OPTION_ENDPOINT=http://127.0.0.1:4318/v1/traces",
-        "CLAUDE_PLUGIN_OPTION_API_KEY=token-abc",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:4318/v1/traces",
+        "OTEL_EXPORTER_OTLP_HEADERS=x-pinta-relay-token=token-abc",
         "PINTA_GUARD_ENDPOINT=http://127.0.0.1:4318/guard/evaluate",
-        "CLAUDE_PLUGIN_ROOT=/tmp/plugin/root",
+        "PINTA_RELAY_TOKEN=token-abc",
       ].join("\n"),
     );
 
     loadEnvFile(file);
 
-    expect(process.env.CLAUDE_PLUGIN_OPTION_ENDPOINT).toBe(
+    expect(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBe(
       "http://127.0.0.1:4318/v1/traces",
     );
-    expect(process.env.CLAUDE_PLUGIN_OPTION_API_KEY).toBe("token-abc");
+    expect(process.env.OTEL_EXPORTER_OTLP_HEADERS).toBe("x-pinta-relay-token=token-abc");
     expect(process.env.PINTA_GUARD_ENDPOINT).toBe(
       "http://127.0.0.1:4318/guard/evaluate",
     );
-    expect(process.env.CLAUDE_PLUGIN_ROOT).toBe("/tmp/plugin/root");
+    expect(process.env.PINTA_RELAY_TOKEN).toBe("token-abc");
   });
 
   it("is a silent no-op when the file is missing", () => {
@@ -85,17 +85,17 @@ describe("loadEnvFile", () => {
     // process.env entries we set before the call survive untouched.
     expect(process.env.PINTA_TEST_ALPHA).toBe("from-shell-prefix");
     // No accidental population of any of our test keys.
-    expect(process.env.CLAUDE_PLUGIN_OPTION_ENDPOINT).toBeUndefined();
-    expect(process.env.CLAUDE_PLUGIN_OPTION_API_KEY).toBeUndefined();
+    expect(process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBeUndefined();
+    expect(process.env.PINTA_RELAY_TOKEN).toBeUndefined();
   });
 
   it("ignores `#` comments and blank lines", () => {
     const dir = makeTmpDir();
-    const file = path.join(dir, "pinta-cc.env");
+    const file = path.join(dir, "pinta-copilot.env");
     fs.writeFileSync(
       file,
       [
-        "# manager v0.1.6+ writes this file",
+        "# install-hooks / sidecar enroll writes this file",
         "",
         "PINTA_TEST_ALPHA=alpha-val",
         "   ",
@@ -112,7 +112,7 @@ describe("loadEnvFile", () => {
 
   it("preserves keys that are already set in process.env (no overwrite)", () => {
     const dir = makeTmpDir();
-    const file = path.join(dir, "pinta-cc.env");
+    const file = path.join(dir, "pinta-copilot.env");
     fs.writeFileSync(
       file,
       [
@@ -121,8 +121,8 @@ describe("loadEnvFile", () => {
       ].join("\n"),
     );
 
-    // Simulate values the shell prefix (v0.1.5 manager) or an explicit
-    // `export` would have injected before the adaptor started.
+    // Simulate values an explicit `export` (or a hook `env` block) injected
+    // before the adaptor started — these must not be overwritten by the file.
     process.env.PINTA_TEST_ALPHA = "from-shell";
 
     loadEnvFile(file);
@@ -133,7 +133,7 @@ describe("loadEnvFile", () => {
 
   it("skips malformed lines (no `=`) without throwing", () => {
     const dir = makeTmpDir();
-    const file = path.join(dir, "pinta-cc.env");
+    const file = path.join(dir, "pinta-copilot.env");
     fs.writeFileSync(
       file,
       [
