@@ -172,7 +172,7 @@ DynamoDB needs no infra change (single schemaless table, `COPILOTSPAN#` prefix, 
 | D2 | Payload = snake (VS Code-compatible) with a camelCase absorption layer **and** a `PINTA_COPILOT_EVENT` env fallback for payloads with no event-name field. |
 | D3 | Bronze prefix `copilot.*`, `ingest.type="copilot"` (sibling of `cc`/`codex`). |
 | D4 | Install = direct hook file (`~/.copilot/hooks/pinta-copilot.json`); plugin auto-discovery channel unused. |
-| D5 | Config = adaptor-loaded env file; no plugin `userConfig`. |
+| D5 | Config = adaptor-loaded env file via namespaced vars `COPILOT_PLUGIN_OPTION_ENDPOINT` / `COPILOT_PLUGIN_OPTION_HEADERS` (no plugin `userConfig`; `OTEL_EXPORTER_OTLP_*` are a lower-priority fallback so the adaptor never collides with Copilot's native OTel). |
 | D6 | Guard registered on both `preToolUse` and `permissionRequest`; each surface fires its own. |
 | D7 | Always exit 0 (CLI preToolUse is fail-closed). |
 | D8 | Relax required fields to `{hook, session_id, cwd}`; pre/post pairing does not depend on `tool_use_id` (absent on CLI). |
