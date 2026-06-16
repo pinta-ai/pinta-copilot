@@ -12,11 +12,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/awarecorp/pinta-copilot.git"
+    "url": "https://github.com/pinta-ai/pinta-copilot.git"
   },
-  "homepage": "https://github.com/awarecorp/pinta-copilot#readme",
+  "homepage": "https://github.com/pinta-ai/pinta-copilot#readme",
   "bugs": {
-    "url": "https://github.com/awarecorp/pinta-copilot/issues"
+    "url": "https://github.com/pinta-ai/pinta-copilot/issues"
   },
   "scripts": {
     "build": "tsc",

@@ -22,7 +22,7 @@ Copilot's **CLI `preToolUse` hook is fail-closed**: a non-zero exit, crash, or t
 ## Install
 
 ```bash
-git clone https://github.com/awarecorp/pinta-copilot.git
+git clone https://github.com/pinta-ai/pinta-copilot.git
 cd pinta-copilot
 npm install && npm run build
 npm run install-hooks        # writes ~/.copilot/hooks/pinta-copilot.json (absolute paths)
