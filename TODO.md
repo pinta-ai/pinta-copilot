@@ -6,10 +6,10 @@ Code for all four layers is implemented, verified, and pushed (see
 
 ## Release / deploy (blocking full pipeline)
 
-- [ ] **npm publish** `@pinta-ai/pinta-copilot@0.1.0`.
+- [ ] **npm publish** `@pinta-ai/pinta-copilot@0.2.0`.
 - [ ] **Fill catalog sha256 placeholders** (currently `0×64`) in `pinta-catalog`:
-  - [ ] `catalog/pinta-copilot/0.1.0.yaml` → `artifact.sha256` = the published npm tarball's SHA-256.
-  - [ ] `catalog/index.json` → the `pinta-copilot` manifest `sha256` = SHA-256 of `pinta-copilot/0.1.0.yaml`.
+  - [ ] `catalog/pinta-copilot/0.2.0.yaml` → `artifact.sha256` = the published npm tarball's SHA-256.
+  - [ ] `catalog/index.json` → the `pinta-copilot` manifest `sha256` = SHA-256 of `pinta-copilot/0.2.0.yaml`.
 - [ ] **OpenSearch mapping** — run `aware-backend` `scripts/setup-opensearch.ts` (local → stage → prod) to add the additive `copilot*` field mappings (no reindex).
 - [ ] **Merge the branches** (all `minho/pinta-copilot`, pushed):
   - [ ] `aware-backend` — copilot ingest slice (Phase 2)

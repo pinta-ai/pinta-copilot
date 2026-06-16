@@ -2,6 +2,17 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.2.0] - 2026-06-16
+
+### Changed
+
+- **GitHub org migration** `awarecorp` → `pinta-ai`. Repository/homepage/bugs
+  URLs in `package.json` and the git remotes now point at
+  `github.com/pinta-ai/pinta-copilot`; `repository.url` normalized to the
+  `git+https://` form.
+- Version bumped to `0.2.0` across `package.json`, `package-lock.json`, and
+  the `SDK_VERSION` constant in `src/core/otlp.ts` (telemetry SDK version).
+
 ## [0.1.0] - 2026-06-09
 
 Initial release. Forked from `pinta-cc` (Claude Code adapter); core layer
