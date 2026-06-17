@@ -11,7 +11,7 @@ const crypto_1 = __importDefault(require("crypto"));
 const os_1 = __importDefault(require("os"));
 const redact_js_1 = require("./redact.js");
 const types_js_1 = require("./types.js");
-const SDK_VERSION = "0.2.0"; // keep in sync with package.json
+const SDK_VERSION = "0.3.1"; // keep in sync with package.json
 /**
  * Copilot CLI/ext version isn't reliably discoverable from the hook process
  * env. Read an optional `COPILOT_CLI_VERSION` override, else "unknown" — a
