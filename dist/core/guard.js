@@ -4,6 +4,10 @@ exports.evaluateGuard = evaluateGuard;
 // Guard must be fast or fail-open. 50ms default keeps the hook snappy;
 // override for slower relays (or test harnesses) via PINTA_GUARD_TIMEOUT_MS.
 const TIMEOUT_MS = Number(process.env.PINTA_GUARD_TIMEOUT_MS) || 50;
+// Self-identify to the manager's guard route so it can attribute calls to this
+// adaptor (the route parses `pinta-*/<version>` out of the User-Agent). Keep the
+// version in sync with package.json.
+const GUARD_UA = 'pinta-copilot/0.3.0';
 function sleep(ms) {
     return new Promise((_, reject) => setTimeout(() => {
         const err = new Error('Guard request timed out');
@@ -23,6 +27,7 @@ async function evaluateGuard(input, endpoint) {
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json',
+                    'user-agent': GUARD_UA,
                     'x-pinta-relay-token': process.env.PINTA_RELAY_TOKEN ?? '',
                 },
                 body: JSON.stringify({ input }),
