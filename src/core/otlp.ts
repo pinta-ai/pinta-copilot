@@ -5,7 +5,7 @@ import type { GuardResult } from "./guard.js";
 import { type RawEvent, eventName } from "./types.js";
 import type { Surface } from "./surface.js";
 
-const SDK_VERSION = "0.2.0"; // keep in sync with package.json
+const SDK_VERSION = "0.3.1"; // keep in sync with package.json
 
 /**
  * Copilot CLI/ext version isn't reliably discoverable from the hook process

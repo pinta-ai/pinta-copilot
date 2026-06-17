@@ -1,6 +1,6 @@
 {
   "name": "@pinta-ai/pinta-copilot",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Generic OTLP forwarder + guard for GitHub Copilot hook events (CLI + VS Code extension)",
   "main": "dist/index.js",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -19,6 +19,7 @@
     "url": "https://github.com/pinta-ai/pinta-copilot/issues"
   },
   "scripts": {
+    "bump": "node scripts/bump.mjs",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",

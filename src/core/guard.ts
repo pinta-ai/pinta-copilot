@@ -23,7 +23,7 @@ const TIMEOUT_MS = Number(process.env.PINTA_GUARD_TIMEOUT_MS) || 50;
 // Self-identify to the manager's guard route so it can attribute calls to this
 // adaptor (the route parses `pinta-*/<version>` out of the User-Agent). Keep the
 // version in sync with package.json.
-const GUARD_UA = 'pinta-copilot/0.3.0';
+const GUARD_UA = 'pinta-copilot/0.3.1';
 
 function sleep(ms: number): Promise<never> {
   return new Promise((_, reject) =>
