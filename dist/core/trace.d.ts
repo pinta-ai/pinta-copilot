@@ -1,3 +1,4 @@
+import { DiskSessionTraceManager } from "@pinta-ai/core";
 import type { PintaConfig } from "./config.js";
 /**
  * Per-turn trace correlation, keyed by `session_id`.
@@ -8,13 +9,6 @@ import type { PintaConfig } from "./config.js";
  * each emits its own session — verified that `session_id` is stable across a
  * turn on both surfaces (H10). The store is a `{ [sessionId]: traceId }` map.
  */
-export declare class TraceManager {
-    private tracePath;
+export declare class TraceManager extends DiskSessionTraceManager {
     constructor(config: PintaConfig);
-    private readMap;
-    private writeMap;
-    /** Start (and persist) a new trace for this session. */
-    newTrace(sessionId?: string): string;
-    /** Current trace for this session; create one if none exists yet. */
-    currentTrace(sessionId?: string): string;
 }

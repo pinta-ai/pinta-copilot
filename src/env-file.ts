@@ -14,22 +14,20 @@
  * Missing file is a silent no-op (config may come purely from process.env).
  *
  * The parser and merge semantics (only fill unset keys; silent no-op on missing
- * file) live in the shared package. The path is resolved here because copilot
- * anchors under `$COPILOT_HOME` (not strictly the user's home dir), which the
- * shared `envFilePath(dir, filename)` helper can't express.
+ * file) live in the shared package, as does the path resolution: copilot anchors
+ * under `$COPILOT_HOME` (not strictly the user's home dir), expressed via core's
+ * `envFilePath(dir, filename, overrideEnvVar)` override hook.
  */
-import os from "node:os";
-import path from "node:path";
-import { loadEnvFile as coreLoadEnvFile, parseEnvFile } from "@pinta-ai/core";
+import {
+  loadEnvFile as coreLoadEnvFile,
+  envFilePath as coreEnvFilePath,
+  parseEnvFile,
+} from "@pinta-ai/core";
 
 export { parseEnvFile };
 
-function copilotHome(): string {
-  return process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
-}
-
 export function envFilePath(): string {
-  return path.join(copilotHome(), "pinta-copilot.env");
+  return coreEnvFilePath(".copilot", "pinta-copilot.env", "COPILOT_HOME");
 }
 
 /** Load the env file (if present) and merge only-unset keys into process.env. */
