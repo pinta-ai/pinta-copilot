@@ -1,53 +1,26 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.evaluateGuard = evaluateGuard;
+// copilot-specific binding over the shared guard in @pinta-ai/core. Preserves
+// the historical copilot behavior: a short, env-overridable timeout
+// (PINTA_GUARD_TIMEOUT_MS, default 50ms) to keep the hook snappy, relay token +
+// disable flag read from process.env, and a `pinta-copilot/<version>` User-Agent.
+const core_1 = require("@pinta-ai/core");
 // Guard must be fast or fail-open. 50ms default keeps the hook snappy;
 // override for slower relays (or test harnesses) via PINTA_GUARD_TIMEOUT_MS.
-const TIMEOUT_MS = Number(process.env.PINTA_GUARD_TIMEOUT_MS) || 50;
+function timeoutMs() {
+    return Number(process.env.PINTA_GUARD_TIMEOUT_MS) || 50;
+}
 // Self-identify to the manager's guard route so it can attribute calls to this
 // adaptor (the route parses `pinta-*/<version>` out of the User-Agent). Keep the
 // version in sync with package.json.
-const GUARD_UA = 'pinta-copilot/0.3.0';
-function sleep(ms) {
-    return new Promise((_, reject) => setTimeout(() => {
-        const err = new Error('Guard request timed out');
-        err.name = 'TimeoutError';
-        reject(err);
-    }, ms));
-}
-async function evaluateGuard(input, endpoint) {
-    if (!endpoint)
-        return null;
-    if (process.env.PINTA_GUARD_DISABLED === '1')
-        return null;
-    const start = Date.now();
-    try {
-        const res = await Promise.race([
-            fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'content-type': 'application/json',
-                    'user-agent': GUARD_UA,
-                    'x-pinta-relay-token': process.env.PINTA_RELAY_TOKEN ?? '',
-                },
-                body: JSON.stringify({ input }),
-            }),
-            sleep(TIMEOUT_MS),
-        ]);
-        if (res.status !== 200) {
-            return { decision: 'ALLOW', reason: null, userMessage: null, durationMs: Date.now() - start, failOpenReason: 'error' };
-        }
-        const body = (await res.json());
-        return {
-            decision: body.decision,
-            reason: body.reason,
-            userMessage: body.userMessage ?? null,
-            durationMs: body.durationMs ?? (Date.now() - start),
-        };
-    }
-    catch (err) {
-        const reason = err.name === 'TimeoutError' ? 'timeout' : 'error';
-        return { decision: 'ALLOW', reason: null, userMessage: null, durationMs: Date.now() - start, failOpenReason: reason };
-    }
+const GUARD_UA = "pinta-copilot/0.3.1";
+function evaluateGuard(input, endpoint) {
+    return (0, core_1.evaluateGuard)(input, endpoint, {
+        timeoutMs: timeoutMs(),
+        token: process.env.PINTA_RELAY_TOKEN ?? "",
+        disabled: process.env.PINTA_GUARD_DISABLED === "1",
+        userAgent: GUARD_UA,
+    });
 }
 //# sourceMappingURL=guard.js.map

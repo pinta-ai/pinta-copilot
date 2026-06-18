@@ -3,11 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.parseEnvFile = void 0;
 exports.envFilePath = envFilePath;
-exports.parseEnvFile = parseEnvFile;
 exports.loadEnvFile = loadEnvFile;
 /**
- * Graceful env-file loader (D5).
+ * Graceful env-file loader (D5) — copilot binding over @pinta-ai/core.
  *
  * pinta-copilot reads its own config from `~/.copilot/pinta-copilot.env`
  * (or `$COPILOT_HOME/pinta-copilot.env`) — a `KEY=VALUE` per line file written
@@ -20,50 +20,24 @@ exports.loadEnvFile = loadEnvFile;
  *   3. legacy keys (handled elsewhere)
  *
  * Missing file is a silent no-op (config may come purely from process.env).
+ *
+ * The parser and merge semantics (only fill unset keys; silent no-op on missing
+ * file) live in the shared package. The path is resolved here because copilot
+ * anchors under `$COPILOT_HOME` (not strictly the user's home dir), which the
+ * shared `envFilePath(dir, filename)` helper can't express.
  */
-const node_fs_1 = __importDefault(require("node:fs"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
+const core_1 = require("@pinta-ai/core");
+Object.defineProperty(exports, "parseEnvFile", { enumerable: true, get: function () { return core_1.parseEnvFile; } });
 function copilotHome() {
     return process.env.COPILOT_HOME || node_path_1.default.join(node_os_1.default.homedir(), ".copilot");
 }
 function envFilePath() {
     return node_path_1.default.join(copilotHome(), "pinta-copilot.env");
 }
-function parseEnvFile(content) {
-    const out = {};
-    for (const raw of content.split("\n")) {
-        const line = raw.trim();
-        if (!line || line.startsWith("#"))
-            continue;
-        const idx = line.indexOf("=");
-        if (idx < 0)
-            continue;
-        const key = line.slice(0, idx).trim();
-        let value = line.slice(idx + 1).trim();
-        if ((value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1);
-        }
-        if (key)
-            out[key] = value;
-    }
-    return out;
-}
 /** Load the env file (if present) and merge only-unset keys into process.env. */
 function loadEnvFile(filePath = envFilePath()) {
-    let content;
-    try {
-        content = node_fs_1.default.readFileSync(filePath, "utf-8");
-    }
-    catch {
-        return; // missing/unreadable → no-op
-    }
-    const parsed = parseEnvFile(content);
-    for (const [key, value] of Object.entries(parsed)) {
-        if (process.env[key] === undefined) {
-            process.env[key] = value;
-        }
-    }
+    (0, core_1.loadEnvFile)(filePath);
 }
 //# sourceMappingURL=env-file.js.map

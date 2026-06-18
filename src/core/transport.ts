@@ -1,32 +1,17 @@
-import { RetryQueue } from "./retry-queue.js";
-import type { OtlpPayload } from "./otlp.js";
-import { mergeBatch } from "./otlp.js";
+// copilot-specific binding over the shared DiskTransport in @pinta-ai/core. Keeps
+// the `new Transport(config)` call shape used by index.ts. Endpoint/headers are
+// resolved from copilot's namespaced COPILOT_PLUGIN_OPTION_* vars (so they never
+// collide with Copilot's own native OTel feature, which reads the standard
+// OTEL_EXPORTER_OTLP_* vars), with OTEL_EXPORTER_OTLP_* honored as a
+// lower-priority fallback for OSS users.
+import { DiskTransport, parseHeadersEnv } from "@pinta-ai/core";
+import type { OtlpTransportOptions } from "@pinta-ai/core";
 import type { PintaConfig } from "./config.js";
 
-const TIMEOUT_MS = 5000;
-
-interface TransportOptions {
-  endpoint: string;
-  headers: Record<string, string>;
-}
-
-function parseHeadersEnv(raw: string | undefined): Record<string, string> {
-  if (!raw) return {};
-  const out: Record<string, string> = {};
-  for (const pair of raw.split(",")) {
-    const [k, ...rest] = pair.split("=");
-    if (k && rest.length > 0) out[k.trim()] = rest.join("=").trim();
-  }
-  return out;
-}
-
-function getOptions(): TransportOptions | null {
-  // Config is namespaced to COPILOT_PLUGIN_OPTION_* so it never collides with
-  // Copilot's own native OTel feature, which reads the standard
-  // OTEL_EXPORTER_OTLP_* vars. COPILOT_PLUGIN_OPTION_ENDPOINT is the full
-  // traces URL. OTEL_EXPORTER_OTLP_* are honored as a lower-priority fallback
-  // for OSS users who prefer the standard names. (ENDPOINT, without /v1/traces,
-  // is a base URL we append to.)
+function resolveOptions(): OtlpTransportOptions | null {
+  // COPILOT_PLUGIN_OPTION_ENDPOINT is the full traces URL. OTEL_EXPORTER_OTLP_*
+  // are honored as a lower-priority fallback for OSS users who prefer the
+  // standard names. (ENDPOINT, without /v1/traces, is a base URL we append to.)
   const fullEndpoint =
     process.env.COPILOT_PLUGIN_OPTION_ENDPOINT ||
     process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -46,86 +31,8 @@ function getOptions(): TransportOptions | null {
   };
 }
 
-export class Transport {
-  private queue: RetryQueue;
-
+export class Transport extends DiskTransport {
   constructor(config: PintaConfig) {
-    this.queue = new RetryQueue(config.pluginData);
-  }
-
-  /**
-   * POST a single payload. On any failure, enqueue it for the next hook to retry.
-   * Silent disable when no endpoint is configured.
-   */
-  async send(payload: OtlpPayload): Promise<void> {
-    const opts = getOptions();
-    if (!opts) return; // Silent disable when no endpoint configured
-    const ok = await this.post(payload, opts);
-    if (!ok) this.queue.enqueue(payload);
-  }
-
-  /**
-   * Best-effort drain. Acquires the lock, reads the queue, attempts a single
-   * batched POST. On failure, leaves the queue untouched.
-   * Silent disable when no endpoint is configured.
-   */
-  async flush(): Promise<void> {
-    const opts = getOptions();
-    if (!opts) return;
-    if (!this.queue.tryAcquireLock()) return;
-    try {
-      const entries = this.queue.readAll();
-      if (entries.length === 0) return;
-      const merged = mergeBatch(entries.map((e) => e.payload));
-      const ok = await this.post(merged, opts);
-      if (ok) this.queue.rewrite([]);
-    } finally {
-      this.queue.release();
-    }
-  }
-
-  private async post(payload: OtlpPayload, opts: TransportOptions): Promise<boolean> {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-    try {
-      // opts.endpoint is the full traces URL — no path append.
-      const res = await fetch(opts.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...opts.headers,
-        },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
-      if (!res.ok) {
-        let body = "";
-        try {
-          body = (await res.text()).slice(0, 200);
-        } catch {
-          /* ignore */
-        }
-        const hint =
-          res.status === 401 || res.status === 403
-            ? " — check OTEL_EXPORTER_OTLP_HEADERS (relay token)"
-            : res.status === 404
-              ? " — check OTEL_EXPORTER_OTLP_TRACES_ENDPOINT path"
-              : res.status >= 500
-                ? " — collector may be down"
-                : "";
-        process.stderr.write(
-          `[pinta-copilot] OTLP POST ${res.status} ${opts.endpoint}${hint}${body ? ` body=${body}` : ""}\n`,
-        );
-        return false;
-      }
-      return true;
-    } catch (err) {
-      process.stderr.write(
-        `[pinta-copilot] OTLP POST failed: ${(err as Error).message ?? String(err)}\n`,
-      );
-      return false;
-    } finally {
-      clearTimeout(timer);
-    }
+    super({ pluginData: config.pluginData, logPrefix: "pinta-copilot", resolveOptions });
   }
 }

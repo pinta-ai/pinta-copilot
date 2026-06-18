@@ -1,24 +1,14 @@
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
+import { generateUlid } from "@pinta-ai/core";
 import type { PintaConfig } from "./config.js";
 
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-function generateUlid(): string {
-  const now = Date.now();
-  let ts = "";
-  let t = now;
-  for (let i = 0; i < 10; i++) {
-    ts = CROCKFORD[t & 31] + ts;
-    t = Math.floor(t / 32);
-  }
-  const rand = crypto.randomBytes(10);
-  let r = "";
-  for (let i = 0; i < 10; i++) r += CROCKFORD[rand[i] & 31];
-  while (r.length < 16) r += CROCKFORD[0];
-  return ts + r;
-}
+// NOTE: copilot's trace correlation is per-session (a `{ [sessionId]: traceId }`
+// map), unlike the single-trace `{ traceId }` file used by cc and the shared
+// @pinta-ai/core TraceManager. CLI and the VS Code extension run concurrently,
+// each with its own session, so a single global trace would collide. This
+// surface-specific behavior stays local; only the shared ULID generator is
+// imported from core.
 
 /**
  * Per-turn trace correlation, keyed by `session_id`.
