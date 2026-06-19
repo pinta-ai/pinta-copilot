@@ -12,4 +12,6 @@ export interface PintaConfig {
     pluginData: string;
     tracePath: string;
 }
+/** Copilot home dir — `$COPILOT_HOME` or `~/.copilot`. Shared by config + tools. */
+export declare function copilotHome(): string;
 export declare function loadConfig(): PintaConfig;

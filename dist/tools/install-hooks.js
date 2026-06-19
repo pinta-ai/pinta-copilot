@@ -22,8 +22,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
  *   node dist/tools/install-hooks.js [--dry-run] [--uninstall]
  */
 const node_fs_1 = __importDefault(require("node:fs"));
-const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
+const config_js_1 = require("../core/config.js");
 const HOOK_FILE = "pinta-copilot.json";
 // Every event routes to the single adapter binary; it branches internally
 // (telemetry for all; guard deny on PreToolUse + permissionRequest).
@@ -41,11 +41,8 @@ const EVENTS = [
     "Notification",
     "permissionRequest",
 ];
-function copilotHome() {
-    return process.env.COPILOT_HOME || node_path_1.default.join(node_os_1.default.homedir(), ".copilot");
-}
 function hooksDir() {
-    return node_path_1.default.join(copilotHome(), "hooks");
+    return node_path_1.default.join((0, config_js_1.copilotHome)(), "hooks");
 }
 /** Absolute path to dist/index.js. This script runs as dist/tools/install-hooks.js,
  *  so resolve relative to the invoked script path (CJS/ESM agnostic). */

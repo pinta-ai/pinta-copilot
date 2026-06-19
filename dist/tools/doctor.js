@@ -12,17 +12,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * Exits 1 if anything required is missing; 0 if healthy.
  */
 const node_fs_1 = __importDefault(require("node:fs"));
-const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
 const surface_js_1 = require("../core/surface.js");
-function copilotHome() {
-    return process.env.COPILOT_HOME || node_path_1.default.join(node_os_1.default.homedir(), ".copilot");
-}
+const config_js_1 = require("../core/config.js");
 const checks = [];
 function check(required, ok, label, detail) {
     checks.push({ ok, label, detail, required });
 }
-const home = copilotHome();
+/** Read the first capture group of `re` from the env file, if present. */
+function matchEnvFile(envFile, re) {
+    const m = node_fs_1.default.readFileSync(envFile, "utf-8").match(re);
+    return m ? m[1].trim() : undefined;
+}
+const home = (0, config_js_1.copilotHome)();
 const hookFile = node_path_1.default.join(home, "hooks", "pinta-copilot.json");
 const envFile = node_path_1.default.join(home, "pinta-copilot.env");
 const adapter = node_path_1.default.join(node_path_1.default.dirname(node_path_1.default.resolve(process.argv[1])), "..", "index.js");
@@ -49,19 +51,13 @@ let endpoint = process.env.COPILOT_PLUGIN_OPTION_ENDPOINT ||
     process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 if (!endpoint && hasEnvFile) {
-    const m = node_fs_1.default
-        .readFileSync(envFile, "utf-8")
-        .match(/(?:COPILOT_PLUGIN_OPTION_ENDPOINT|OTEL_EXPORTER_OTLP_(?:TRACES_)?ENDPOINT)=(.+)/);
-    if (m)
-        endpoint = m[1].trim();
+    endpoint = matchEnvFile(envFile, /(?:COPILOT_PLUGIN_OPTION_ENDPOINT|OTEL_EXPORTER_OTLP_(?:TRACES_)?ENDPOINT)=(.+)/);
 }
 check(true, Boolean(endpoint), "traces endpoint configured", endpoint || "(unset — spans will be dropped)");
 // 4. guard endpoint (optional)
 let guardEp = process.env.PINTA_GUARD_ENDPOINT;
 if (!guardEp && hasEnvFile) {
-    const m = node_fs_1.default.readFileSync(envFile, "utf-8").match(/PINTA_GUARD_ENDPOINT=(.+)/);
-    if (m)
-        guardEp = m[1].trim();
+    guardEp = matchEnvFile(envFile, /PINTA_GUARD_ENDPOINT=(.+)/);
 }
 check(false, Boolean(guardEp), "guard endpoint (optional)", guardEp || "(none — telemetry only, no allow/deny)");
 // --- report ---
@@ -70,12 +66,9 @@ for (const c of checks) {
     const mark = c.ok ? "✅" : c.required ? "❌" : "⚠️ ";
     if (!c.ok && c.required)
         failed++;
-    // eslint-disable-next-line no-console
     console.log(`${mark} ${c.label}${c.detail ? `  —  ${c.detail}` : ""}`);
 }
-// eslint-disable-next-line no-console
 console.log(`\nsurface (this shell): ${(0, surface_js_1.detectSurface)()}`);
-// eslint-disable-next-line no-console
 console.log(failed === 0 ? "\nhealthy ✅" : `\n${failed} required check(s) failed ❌`);
 process.exit(failed === 0 ? 0 : 1);
 //# sourceMappingURL=doctor.js.map

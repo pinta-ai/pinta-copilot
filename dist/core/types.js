@@ -101,6 +101,7 @@ const INTERNAL_TOOLS = new Set(["report_intent", "ask_user"]);
 function isInternalTool(name) {
     return name !== undefined && INTERNAL_TOOLS.has(name);
 }
+// --- Hook deny output formats (one per gating event) ---
 /**
  * Render the deny decision in the format the firing event expects, or null if
  * the event isn't a gating event. preToolUse uses `permissionDecision`; the CLI

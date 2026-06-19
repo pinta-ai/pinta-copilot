@@ -16,7 +16,8 @@ export interface PintaConfig {
   tracePath: string;
 }
 
-function copilotHome(): string {
+/** Copilot home dir — `$COPILOT_HOME` or `~/.copilot`. Shared by config + tools. */
+export function copilotHome(): string {
   return process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
 }
 

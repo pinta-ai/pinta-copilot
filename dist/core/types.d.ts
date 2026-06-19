@@ -27,20 +27,6 @@ export declare function classify(e: RawEvent): EventKind;
  *  PermissionRequest is CLI-only (ext has no such event → entry is ignored). */
 export declare function isGuardEvent(kind: EventKind): boolean;
 export declare function isInternalTool(name: string | undefined): boolean;
-/** preToolUse decision-control — honored by CLI, ext, and cloud. */
-export interface PreToolUseDenyOutput {
-    hookSpecificOutput: {
-        hookEventName: "PreToolUse";
-        permissionDecision: "deny";
-        permissionDecisionReason: string;
-    };
-}
-/** permissionRequest decision-control — CLI permission service only. */
-export interface PermissionRequestDenyOutput {
-    behavior: "deny";
-    message: string;
-    interrupt?: boolean;
-}
 /**
  * Render the deny decision in the format the firing event expects, or null if
  * the event isn't a gating event. preToolUse uses `permissionDecision`; the CLI

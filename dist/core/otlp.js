@@ -48,21 +48,18 @@ const ATTR_POLICY = {
 // Discriminator keys covered by `copilot.hook` — don't re-emit them raw.
 const DISCRIMINATOR_KEYS = new Set(["hook_event_name", "hookEventName", "hookName"]);
 function flattenEvent(event, surface) {
-    const out = [];
-    // Discriminator first so aware-backend's detectIngestType hits it cheaply.
-    out.push({ key: "ingest.type", value: { stringValue: "copilot" } });
-    // Canonical hook name regardless of incoming discriminator key (snake/camel/hookName).
-    out.push({ key: "copilot.hook", value: { stringValue: (0, types_js_1.eventName)(event) ?? "unknown" } });
-    // Runtime surface label (cli | ext | cloud).
-    out.push({ key: "copilot.surface", value: { stringValue: surface } });
-    const rest = {};
-    for (const [k, v] of Object.entries(event)) {
-        if (DISCRIMINATOR_KEYS.has(k))
-            continue; // covered by copilot.hook
-        rest[k] = v;
-    }
-    out.push(...(0, core_1.attrsFromRecord)(rest, "copilot", ATTR_POLICY));
-    return out;
+    // Bronze flattening: every top-level field → `copilot.<key>`, except the
+    // discriminator keys, which are folded into the canonical `copilot.hook`.
+    const rest = Object.fromEntries(Object.entries(event).filter(([k]) => !DISCRIMINATOR_KEYS.has(k)));
+    return [
+        // Discriminator first so aware-backend's detectIngestType hits it cheaply.
+        { key: "ingest.type", value: { stringValue: "copilot" } },
+        // Canonical hook name regardless of incoming discriminator key (snake/camel/hookName).
+        { key: "copilot.hook", value: { stringValue: (0, types_js_1.eventName)(event) ?? "unknown" } },
+        // Runtime surface label (cli | ext | cloud).
+        { key: "copilot.surface", value: { stringValue: surface } },
+        ...(0, core_1.attrsFromRecord)(rest, "copilot", ATTR_POLICY),
+    ];
 }
 function resourceAttrs() {
     return [
