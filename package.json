@@ -1,6 +1,6 @@
 {
   "name": "@pinta-ai/pinta-copilot",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Generic OTLP forwarder + guard for GitHub Copilot hook events (CLI + VS Code extension)",
   "main": "dist/index.js",
   "exports": {
