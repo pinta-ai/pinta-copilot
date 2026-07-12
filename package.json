@@ -3,6 +3,12 @@
   "version": "0.4.0",
   "description": "Generic OTLP forwarder + guard for GitHub Copilot hook events (CLI + VS Code extension)",
   "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
   "license": "PolyForm-Noncommercial-1.0.0",
   "files": [
     "dist",
@@ -20,10 +26,13 @@
   },
   "scripts": {
     "bump": "node scripts/bump.mjs",
-    "build": "tsc --noEmit && esbuild src/index.ts src/tools/doctor.ts src/tools/install-hooks.ts --bundle --platform=node --format=cjs --target=node18 --minify --outbase=src --outdir=dist",
+    "build": "tsc --noEmit && npm run build:cjs && npm run build:esm",
+    "build:cjs": "esbuild src/index.ts src/tools/doctor.ts src/tools/install-hooks.ts --bundle --platform=node --format=cjs --target=node18 --minify --outbase=src --outdir=dist",
+    "build:esm": "esbuild src/index.mts --bundle --platform=node --format=esm --target=node18 --minify --banner:js=\"import{createRequire as __pintaCreateRequire}from 'node:module';const require=__pintaCreateRequire(import.meta.url);\" --outfile=dist/index.mjs",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "smoke:import": "node scripts/smoke-import.mjs",
     "mock-server": "npx tsx tools/mock-server.ts",
     "install-hooks": "node dist/tools/install-hooks.js",
     "uninstall-hooks": "node dist/tools/install-hooks.js --uninstall",
