@@ -16,7 +16,7 @@ function timeoutMs(): number {
 // Self-identify to the manager's guard route so it can attribute calls to this
 // adaptor (the route parses `pinta-*/<version>` out of the User-Agent). Keep the
 // version in sync with package.json.
-const GUARD_UA = "pinta-copilot/0.3.1";
+const GUARD_UA = "pinta-copilot/0.4.0";
 
 export function evaluateGuard(
   input: GuardInput,
