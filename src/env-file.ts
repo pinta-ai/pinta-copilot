@@ -1,5 +1,5 @@
 /**
- * Graceful env-file loader (D5).
+ * Graceful env-file loader (D5) — copilot binding over @pinta-ai/core.
  *
  * pinta-copilot reads its own config from `~/.copilot/pinta-copilot.env`
  * (or `$COPILOT_HOME/pinta-copilot.env`) — a `KEY=VALUE` per line file written
@@ -12,51 +12,25 @@
  *   3. legacy keys (handled elsewhere)
  *
  * Missing file is a silent no-op (config may come purely from process.env).
+ *
+ * The parser and merge semantics (only fill unset keys; silent no-op on missing
+ * file) live in the shared package, as does the path resolution: copilot anchors
+ * under `$COPILOT_HOME` (not strictly the user's home dir), expressed via core's
+ * `envFilePath(dir, filename, overrideEnvVar)` override hook.
  */
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import {
+  loadEnvFile as coreLoadEnvFile,
+  envFilePath as coreEnvFilePath,
+  parseEnvFile,
+} from "@pinta-ai/core";
 
-function copilotHome(): string {
-  return process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
-}
+export { parseEnvFile };
 
 export function envFilePath(): string {
-  return path.join(copilotHome(), "pinta-copilot.env");
-}
-
-export function parseEnvFile(content: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const raw of content.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const idx = line.indexOf("=");
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    let value = line.slice(idx + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key) out[key] = value;
-  }
-  return out;
+  return coreEnvFilePath(".copilot", "pinta-copilot.env", "COPILOT_HOME");
 }
 
 /** Load the env file (if present) and merge only-unset keys into process.env. */
 export function loadEnvFile(filePath: string = envFilePath()): void {
-  let content: string;
-  try {
-    content = fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return; // missing/unreadable → no-op
-  }
-  const parsed = parseEnvFile(content);
-  for (const [key, value] of Object.entries(parsed)) {
-    if (process.env[key] === undefined) {
-      process.env[key] = value;
-    }
-  }
+  coreLoadEnvFile(filePath);
 }

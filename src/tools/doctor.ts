@@ -7,17 +7,19 @@
  * Exits 1 if anything required is missing; 0 if healthy.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { detectSurface } from "../core/surface.js";
-
-function copilotHome(): string {
-  return process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
-}
+import { copilotHome } from "../core/config.js";
 
 const checks: Array<{ ok: boolean; label: string; detail?: string; required: boolean }> = [];
 function check(required: boolean, ok: boolean, label: string, detail?: string) {
   checks.push({ ok, label, detail, required });
+}
+
+/** Read the first capture group of `re` from the env file, if present. */
+function matchEnvFile(envFile: string, re: RegExp): string | undefined {
+  const m = fs.readFileSync(envFile, "utf-8").match(re);
+  return m ? m[1].trim() : undefined;
 }
 
 const home = copilotHome();
@@ -51,18 +53,17 @@ let endpoint =
   process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ||
   process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
 if (!endpoint && hasEnvFile) {
-  const m = fs
-    .readFileSync(envFile, "utf-8")
-    .match(/(?:COPILOT_PLUGIN_OPTION_ENDPOINT|OTEL_EXPORTER_OTLP_(?:TRACES_)?ENDPOINT)=(.+)/);
-  if (m) endpoint = m[1].trim();
+  endpoint = matchEnvFile(
+    envFile,
+    /(?:COPILOT_PLUGIN_OPTION_ENDPOINT|OTEL_EXPORTER_OTLP_(?:TRACES_)?ENDPOINT)=(.+)/,
+  );
 }
 check(true, Boolean(endpoint), "traces endpoint configured", endpoint || "(unset — spans will be dropped)");
 
 // 4. guard endpoint (optional)
 let guardEp = process.env.PINTA_GUARD_ENDPOINT;
 if (!guardEp && hasEnvFile) {
-  const m = fs.readFileSync(envFile, "utf-8").match(/PINTA_GUARD_ENDPOINT=(.+)/);
-  if (m) guardEp = m[1].trim();
+  guardEp = matchEnvFile(envFile, /PINTA_GUARD_ENDPOINT=(.+)/);
 }
 check(false, Boolean(guardEp), "guard endpoint (optional)", guardEp || "(none — telemetry only, no allow/deny)");
 
@@ -71,11 +72,8 @@ let failed = 0;
 for (const c of checks) {
   const mark = c.ok ? "✅" : c.required ? "❌" : "⚠️ ";
   if (!c.ok && c.required) failed++;
-  // eslint-disable-next-line no-console
   console.log(`${mark} ${c.label}${c.detail ? `  —  ${c.detail}` : ""}`);
 }
-// eslint-disable-next-line no-console
 console.log(`\nsurface (this shell): ${detectSurface()}`);
-// eslint-disable-next-line no-console
 console.log(failed === 0 ? "\nhealthy ✅" : `\n${failed} required check(s) failed ❌`);
 process.exit(failed === 0 ? 0 : 1);

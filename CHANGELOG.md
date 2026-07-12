@@ -2,6 +2,50 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.4.0] - 2026-07-12
+
+### Changed
+
+- **Shared core extraction.** The duplicated low-level utilities (otlp,
+  transport, retry-queue, redact, guard, session trace) now come from the
+  private `@pinta-ai/core` package; `src/core/*.ts` keeps only thin bindings
+  plus the copilot-specific bits (event flattening, surface detection, the
+  `envFilePath` override). Core is a devDependency, bundled into `dist/` by
+  esbuild at build time, so npmjs consumers never need private-registry access
+  and there is no runtime dependency on it.
+- `@pinta-ai/core` bumped `^0.2.0` → `^0.3.0`. The upgrade is additive; no
+  adaptor source change was needed.
+
+### Added
+
+- `pinta.client.rtt_ms` / `pinta.client.op` span attributes on guarded spans.
+  `buildOtlpPayload` already forwards its `guard` result into core's
+  `buildPayload`, and core `0.3.0` derives the client-call timing from the
+  `GuardResult.clientRttMs` it now measures. The manager can only time its own
+  handler, so `clientRttMs - durationMs` gives it the transport overhead.
+
+### Fixed
+
+- `package-lock.json` resolved `@pinta-ai/core` as a local link to
+  `../pinta-core` while `package.json` declared a version range. `npm ci` did
+  not error on the mismatch — it created a dangling symlink to a dev-machine-only
+  path and the build then failed `TS2307: Cannot find module '@pinta-ai/core'`,
+  breaking pr-validate, build-dist and publish. The lock now pins core's
+  GitHub Packages tarball with its integrity hash.
+- `npm publish` would have failed `ENEEDAUTH`: the committed `.npmrc` pointed
+  npmjs auth at `${NPM_TOKEN}`, but no such secret exists, so it expanded to an
+  empty token instead of falling through to OIDC trusted publishing. The npmjs
+  `_authToken` line is gone and `setup-node`'s `registry-url` is back;
+  `NODE_AUTH_TOKEN` is now scoped to the `npm ci` step so it is not sent to
+  npmjs during publish.
+- `npm` pinned to `11.18.0` in the publish workflow. `npm@latest` is now 12.x,
+  which requires node >=22.22 and aborts the node-20 publish job with
+  `EBADENGINE`.
+- `tests/core/guard.test.ts` asserted the core `0.2.0` `GuardResult` shape with
+  an exhaustive `toEqual` and broke once `clientRttMs` was added. It now matches
+  that field by type, since it is a measured wall-clock rather than a value
+  echoed from the response body.
+
 ## [0.2.0] - 2026-06-16
 
 ### Changed

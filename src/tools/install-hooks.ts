@@ -17,8 +17,8 @@
  *   node dist/tools/install-hooks.js [--dry-run] [--uninstall]
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { copilotHome } from "../core/config.js";
 
 const HOOK_FILE = "pinta-copilot.json";
 
@@ -38,10 +38,6 @@ const EVENTS = [
   "Notification",
   "permissionRequest",
 ];
-
-function copilotHome(): string {
-  return process.env.COPILOT_HOME || path.join(os.homedir(), ".copilot");
-}
 
 function hooksDir(): string {
   return path.join(copilotHome(), "hooks");
