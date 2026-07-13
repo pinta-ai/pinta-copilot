@@ -69,15 +69,20 @@ export async function runHook(): Promise<number> {
       );
     }
 
-    // Telemetry: one span per event (Bronze flattening, copilot.* prefix).
-    const payload = buildOtlpPayload({ event, traceId, surface, guard });
-    await transport.send(payload);
-
-    // Enforcement: emit a deny decision in the format the firing event expects.
+    // Enforcement FIRST: emit the deny decision in the format the firing event
+    // expects BEFORE any telemetry. The host is fail-closed, so a throw in the
+    // telemetry block below (e.g. os.userInfo() in buildOtlpPayload on a host
+    // with no passwd entry) must not be able to discard an already-decided
+    // DENY via the outer catch — that would silently ALLOW a denied tool.
     if (guard?.decision === "DENY") {
       const out = formatDeny(kind, guard.userMessage ?? guard.reason ?? "guard_deny");
       if (out) process.stdout.write(out + "\n");
     }
+
+    // Telemetry: one span per event (Bronze flattening, copilot.* prefix).
+    // Best-effort, strictly after the enforcement decision has been emitted.
+    const payload = buildOtlpPayload({ event, traceId, surface, guard });
+    await transport.send(payload);
   } catch (err) {
     process.stderr.write(`[pinta-copilot] error: ${err}\n`);
     // fail-open by design — never block a tool because the adapter crashed.
