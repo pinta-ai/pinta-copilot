@@ -43,6 +43,16 @@ const QUIESCE_STABLE_MS = 2_000;
 const QUIESCE_POLL_MS = 250;
 /** Total attempts for the quiesce-copy fallback (1 initial + up to 2 retries). */
 const QUIESCE_MAX_ATTEMPTS = 3;
+/**
+ * Overall wall-clock deadline for a single quiesce wait. `snapshot()` runs
+ * inside the long-lived pinta-manager sidecar (imported, not a short-lived
+ * CLI), so a db that is continuously written (never goes stable for
+ * QUIESCE_STABLE_MS) must not wedge the caller forever — we bound the wait and
+ * throw (the snapshot contract permits skipping a file).
+ */
+const QUIESCE_OVERALL_DEADLINE_MS = 30_000;
+/** Max wall-clock for the `sqlite3 .backup` subprocess before we SIGKILL it and fall through to quiesce-copy. */
+const SQLITE_BACKUP_TIMEOUT_MS = 30_000;
 
 let sqliteCliAvailable: Promise<boolean> | undefined;
 
@@ -83,7 +93,14 @@ function quoteForSqliteCli(value: string): string {
 async function backupViaSqliteCli(sourceDbPath: string, destDbPath: string): Promise<void> {
   const command = `.backup ${quoteForSqliteCli(destDbPath)}`;
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn("sqlite3", [sourceDbPath, command], { stdio: ["ignore", "ignore", "pipe"] });
+    const proc = spawn("sqlite3", [sourceDbPath, command], {
+      stdio: ["ignore", "ignore", "pipe"],
+      // A `.backup` against a pathologically-locked db must not hang the
+      // sidecar: SIGKILL it past the deadline; the exit handler then rejects
+      // (code === null) and `snapshotDatabase` falls through to quiesce-copy.
+      timeout: SQLITE_BACKUP_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
     let stderr = "";
     proc.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
@@ -129,12 +146,18 @@ async function waitForQuiescence(dbAbsPath: string): Promise<SidecarStat[]> {
   const { wal, shm } = siblingPaths(dbAbsPath);
   const paths = [dbAbsPath, wal, shm];
 
-  let stableSince = Date.now();
+  const startedAt = Date.now();
+  let stableSince = startedAt;
   let last: SidecarStat[] = await Promise.all(paths.map(async (p) => ({ path: p, st: await statOptional(p) })));
 
   for (;;) {
     if (Date.now() - stableSince >= QUIESCE_STABLE_MS) {
       return last;
+    }
+    if (Date.now() - startedAt >= QUIESCE_OVERALL_DEADLINE_MS) {
+      throw new Error(
+        `snapshot: ${dbAbsPath} never quiesced within ${QUIESCE_OVERALL_DEADLINE_MS}ms (actively written?)`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, QUIESCE_POLL_MS));
     const next = await Promise.all(paths.map(async (p) => ({ path: p, st: await statOptional(p) })));
@@ -195,18 +218,25 @@ export async function snapshotDatabase(file: TranscriptFile, opts: SnapshotOptio
   const dir = await mkdtemp(path.join(tmpDirBase, "pinta-copilot-snapshot-"));
   const destDbPath = path.join(dir, path.basename(file.absPath));
 
-  if (await detectSqliteCli()) {
-    try {
-      await backupViaSqliteCli(file.absPath, destDbPath);
-      return destDbPath;
-    } catch {
-      // Fall through to quiesce-copy — e.g. sqlite3 present but the file is
-      // locked in a way `.backup` doesn't like, or some other CLI quirk.
+  try {
+    if (await detectSqliteCli()) {
+      try {
+        await backupViaSqliteCli(file.absPath, destDbPath);
+        return destDbPath;
+      } catch {
+        // Fall through to quiesce-copy — e.g. sqlite3 present but the file is
+        // locked in a way `.backup` doesn't like, or some other CLI quirk.
+      }
     }
-  }
 
-  await snapshotViaQuiesceCopy(file.absPath, destDbPath);
-  return destDbPath;
+    await snapshotViaQuiesceCopy(file.absPath, destDbPath);
+    return destDbPath;
+  } catch (err) {
+    // Both strategies failed (or the quiesce wait hit its deadline): don't
+    // leak the mkdtemp'd dir — nothing usable lives in it. Best-effort rm.
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 /** Removes the temp dir a `snapshotDatabase()` result lives in. */
