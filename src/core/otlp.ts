@@ -20,7 +20,7 @@ import type { Surface } from "./surface.js";
 export { mergeBatch };
 export type { OtlpPayload, OtlpAttribute };
 
-const SDK_VERSION = "0.5.0"; // keep in sync with package.json
+const SDK_VERSION = "0.6.0"; // keep in sync with package.json
 
 /**
  * Copilot CLI/ext version isn't reliably discoverable from the hook process
