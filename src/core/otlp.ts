@@ -12,6 +12,25 @@ import {
 import { type RawEvent, eventName } from "./types.js";
 import type { Surface } from "./surface.js";
 
+// `os.userInfo()` throws (ENOENT / SystemError) on hosts with no passwd entry
+// for the process uid — containers, CI runners, service accounts. This runs per
+// span build, so an unguarded call means silent telemetry loss. Resolve the
+// owner once, falling back to env/uid, and never throw.
+let cachedProcessOwner: string | undefined;
+function processOwner(): string {
+  if (cachedProcessOwner === undefined) {
+    try {
+      cachedProcessOwner = os.userInfo().username;
+    } catch {
+      cachedProcessOwner =
+        process.env.USER ??
+        process.env.LOGNAME ??
+        (typeof process.getuid === "function" ? String(process.getuid()) : "unknown");
+    }
+  }
+  return cachedProcessOwner;
+}
+
 // OTLP envelope + the redaction-aware attribute pipeline now live in
 // @pinta-ai/core. This module keeps only the copilot-specific bits: the 3-surface
 // event flattening (ingest.type/copilot.hook/copilot.surface + Bronze
@@ -89,7 +108,7 @@ function resourceAttrs(): OtlpAttribute[] {
     { key: "telemetry.sdk.language", value: { stringValue: "nodejs" } },
     { key: "telemetry.sdk.version", value: { stringValue: SDK_VERSION } },
     { key: "process.pid", value: { intValue: process.pid } },
-    { key: "process.owner", value: { stringValue: os.userInfo().username } },
+    { key: "process.owner", value: { stringValue: processOwner() } },
     { key: "host.name", value: { stringValue: os.hostname() } },
     { key: "host.arch", value: { stringValue: os.arch() } },
   ];
