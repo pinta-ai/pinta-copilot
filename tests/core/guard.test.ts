@@ -49,7 +49,18 @@ describe('evaluateGuard', () => {
   });
 
   it('returns fail-open on timeout', async () => {
-    globalThis.fetch = vi.fn(async () => new Promise(() => {})) as never;
+    // core >=0.5.0 aborts the fetch via AbortController on timeout, so the
+    // mock must reject on signal abort — a never-settling promise would hang.
+    globalThis.fetch = vi.fn(
+      (_url: unknown, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }),
+    ) as never;
     const r = await evaluateGuard(
       { spanId: 's', toolName: 'Bash' },
       'http://127.0.0.1:5147/guard/evaluate',

@@ -2,6 +2,17 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.6.0] - 2026-07-20
+
+### Changed
+
+- `@pinta-ai/core` bumped `^0.3.0` → `^0.5.0` (devDependency, bundled
+  into `dist/` at build). Pulls in the oversized-flush fix (pinta-manager#180
+  follow-up): the retry queue now flushes in 900 KiB chunks instead of one
+  unbounded POST, spans are capped at 800 KiB at build time, and a payload
+  that alone exceeds the POST budget is dropped with a diagnostic instead of
+  poisoning every later flush. No adaptor source change was needed.
+
 ## [0.4.0] - 2026-07-12
 
 ### Changed
