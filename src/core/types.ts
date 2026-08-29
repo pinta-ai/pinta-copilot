@@ -59,6 +59,18 @@ export function toolName(e: RawEvent): string | undefined {
   return str(e.tool_name) ?? str(e.toolName);
 }
 
+/**
+ * working directory — `cwd` (snake/camel are the same word here).
+ *
+ * The manager resolves relative targets against it before judging them:
+ * `rm -rf passwd` reads as routine work until you know it was issued from
+ * /etc (PTA-176). Absent means the payload did not carry one, which leaves
+ * verdicts exactly as they were.
+ */
+export function cwd(e: RawEvent): string | undefined {
+  return str(e.cwd) ?? str(e.workingDirectory);
+}
+
 /** tool input — `tool_input` (snake) / `toolArgs` / `toolInput` (camel). */
 export function toolInput(e: RawEvent): unknown {
   return e.tool_input ?? e.toolArgs ?? e.toolInput;

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classify, eventName, sessionId, toolName, toolInput, isGuardEvent, isInternalTool, formatDeny } from '../../src/core/types';
+import { classify, eventName, sessionId, toolName, toolInput, cwd, isGuardEvent, isInternalTool, formatDeny } from '../../src/core/types';
 
 describe('types — 3-way discriminator + field absorption', () => {
   it('resolves event name from hook_event_name / hookEventName / hookName', () => {
@@ -63,5 +63,26 @@ describe('types — 3-way discriminator + field absorption', () => {
     });
     expect(JSON.parse(formatDeny('PermissionRequest', 'r')!)).toEqual({ behavior: 'deny', message: 'r' });
     expect(formatDeny('PostToolUse', 'r')).toBeNull();
+  });
+});
+
+/**
+ * What the guard is told about the invocation.
+ *
+ * Both fields are on every payload the hook receives and both were being
+ * dropped. `cwd` locates a relative target — `rm -rf passwd` reads as routine
+ * work until you know it was issued from /etc (PTA-176) — and the event is
+ * what lets the manager trust the tool name, since Claude Code owns those
+ * names and Copilot does not, so without it a tool called `Read` is taken at
+ * its word and its arguments are read as content (PTA-207).
+ */
+describe('cwd accessor', () => {
+  it('reads the snake and camel spellings the surfaces use', () => {
+    expect(cwd({ cwd: '/etc' })).toBe('/etc');
+    expect(cwd({ workingDirectory: '/etc' })).toBe('/etc');
+  });
+
+  it('is undefined when the payload carries no directory', () => {
+    expect(cwd({ session_id: 's' })).toBeUndefined();
   });
 });
