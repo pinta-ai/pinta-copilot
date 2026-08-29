@@ -20,6 +20,8 @@ import {
   sessionId as getSessionId,
   toolName as getToolName,
   toolInput as getToolInput,
+  cwd as getCwd,
+  eventName as getEventName,
 } from "./core/types.js";
 import { Transport } from "./core/transport.js";
 import { TraceManager } from "./core/trace.js";
@@ -56,10 +58,17 @@ export async function runHook(): Promise<number> {
     let guard = null;
     if (isGuardEvent(kind) && !isInternalTool(toolNm)) {
       const ti = getToolInput(event);
+      // `cwd` and the event name were on the payload and were being dropped.
+      // `cwd` locates a relative target — `rm -rf passwd` reads as routine work
+      // until you know it was issued from /etc (PTA-176) — and the event is
+      // what lets the manager trust the tool name, since Claude Code owns those
+      // names and Copilot does not (PTA-207).
       guard = await evaluateGuard(
         {
           spanId: sid ?? "unknown",
           toolName: toolNm,
+          method: getEventName(event),
+          cwd: getCwd(event),
           toolInput: ti,
           rawTextFields: {
             toolInput: typeof ti === "string" ? ti : JSON.stringify(ti ?? null),
