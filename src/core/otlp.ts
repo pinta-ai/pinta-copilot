@@ -1,4 +1,6 @@
+import fs from "fs";
 import os from "os";
+import path from "path";
 import {
   attrsFromRecord,
   buildPayload,
@@ -42,12 +44,96 @@ export type { OtlpPayload, OtlpAttribute };
 const SDK_VERSION = "0.6.0"; // keep in sync with package.json
 
 /**
- * Copilot CLI/ext version isn't reliably discoverable from the hook process
- * env. Read an optional `COPILOT_CLI_VERSION` override, else "unknown" — a
- * missing version must never fail the hook.
+ * `''` and `'unknown'` are placeholders, not values. An unfillable field must
+ * stay EMPTY: written out as the literal `"unknown"` it becomes indistinguishable
+ * from an agent actually named that, and `GROUP BY agent_version` then reports
+ * the placeholder as the fleet's top version.
  */
-function getCopilotVersion(): string {
-  return process.env.COPILOT_CLI_VERSION || "unknown";
+const PLACEHOLDERS: ReadonlySet<string> = new Set([
+  "", "unknown", "undefined", "null", "n/a", "none",
+]);
+function real(v: unknown): string | undefined {
+  const t = typeof v === "string" ? v.trim() : undefined;
+  return t && !PLACEHOLDERS.has(t.toLowerCase()) ? t : undefined;
+}
+
+/**
+ * `1.0.83`, `1.0.83-beta.1`. Used to vet a value we DERIVE (a directory name)
+ * rather than one we are handed: the package cache can also be keyed by a
+ * channel (`latest`, `nightly`), and a channel is not a version.
+ */
+const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+function versionLike(v: string | undefined): string | undefined {
+  const t = real(v);
+  return t && VERSION_RE.test(t) ? t : undefined;
+}
+
+/**
+ * Copilot CLI/ext version — four sources, most authoritative first.
+ *
+ * Measured 2026-09-15 inside a live Copilot CLI 1.0.83 hook process:
+ *
+ *   COPILOT_CLI_VERSION            unset    ← the only source this used to read
+ *   COPILOT_CLI_BINARY_VERSION     1.0.83
+ *   COPILOT_CLI_RESOLVED_DIST_DIR  …/pkg/darwin-arm64/1.0.83  (+ package.json)
+ *
+ * So every span shipped `service.version="unknown"` while three live answers sat
+ * next to the dead one.
+ *
+ * None of the four costs a subprocess, and that is deliberate: Copilot spawns a
+ * FRESH process per hook event, so an in-process cache spans a single event and
+ * a `copilot --version` fallback would be paid on every tool call.
+ */
+function getCopilotVersion(event?: RawEvent): string | undefined {
+  // 1. The payload, when the host volunteers it. Costs nothing and describes
+  //    the process that actually fired, not whatever else is installed.
+  const fromPayload = event
+    ? real(event.copilot_version) ??
+      real(event.copilotVersion) ??
+      real(event.cli_version) ??
+      real(event.cliVersion) ??
+      real(event.version)
+    : undefined;
+  if (fromPayload) return fromPayload;
+
+  if (cachedHostVersion === undefined) cachedHostVersion = resolveHostVersion();
+  return cachedHostVersion ?? undefined;
+}
+
+// `null` = resolved and nothing answered; `undefined` = not resolved yet.
+let cachedHostVersion: string | null | undefined;
+
+function resolveHostVersion(): string | null {
+  // 2. Env. The live name first — `COPILOT_CLI_VERSION` stays as the documented
+  //    manual override, but nothing in the CLI sets it.
+  const fromEnv =
+    real(process.env.COPILOT_CLI_BINARY_VERSION) ?? real(process.env.COPILOT_CLI_VERSION);
+  if (fromEnv) return fromEnv;
+
+  const dist = real(process.env.COPILOT_CLI_RESOLVED_DIST_DIR);
+  if (dist) {
+    // 3. The package cache is keyed BY version — releases sit side by side
+    //    (`1.0.81/`, `1.0.82/`, `1.0.83/`), so the leaf names the running one.
+    const fromPath = versionLike(path.basename(dist));
+    if (fromPath) return fromPath;
+
+    // 4. …and that directory carries the manifest that names it. Reached only
+    //    when the leaf is a channel rather than a version.
+    const fromManifest = readManifestVersion(dist);
+    if (fromManifest) return fromManifest;
+  }
+
+  return null;
+}
+
+function readManifestVersion(dir: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(dir, "package.json"), "utf8");
+    return real((JSON.parse(raw) as { version?: unknown }).version);
+  } catch {
+    // Absent, unreadable, or not JSON. A missing version must never fail the hook.
+    return undefined;
+  }
 }
 
 /**
@@ -100,10 +186,15 @@ function flattenEvent(event: RawEvent, surface: Surface): OtlpAttribute[] {
   ];
 }
 
-function resourceAttrs(): OtlpAttribute[] {
+function resourceAttrs(event?: RawEvent): OtlpAttribute[] {
+  const version = getCopilotVersion(event);
   return [
     { key: "service.name", value: { stringValue: "copilot" } },
-    { key: "service.version", value: { stringValue: getCopilotVersion() } },
+    // Omitted when unresolved. The attribute's absence is the honest signal —
+    // see PLACEHOLDERS above for why `"unknown"` is not.
+    ...(version
+      ? [{ key: "service.version", value: { stringValue: version } } as OtlpAttribute]
+      : []),
     { key: "telemetry.sdk.name", value: { stringValue: "pinta-copilot" } },
     { key: "telemetry.sdk.language", value: { stringValue: "nodejs" } },
     { key: "telemetry.sdk.version", value: { stringValue: SDK_VERSION } },
@@ -125,7 +216,7 @@ export function buildOtlpPayload(args: {
     traceId: args.traceId,
     spanName: `copilot.${snakeCase(eventName(args.event) ?? "unknown")}`,
     attributes: flattenEvent(args.event, args.surface),
-    resource: resourceAttrs(),
+    resource: resourceAttrs(args.event),
     scope: { name: "pinta-copilot", version: SDK_VERSION },
     now: args.now,
     guard: args.guard,
