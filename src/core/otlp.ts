@@ -1,6 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { ADAPTER_VERSION } from "./version.js";
 import {
   attrsFromRecord,
   buildPayload,
@@ -41,7 +42,7 @@ function processOwner(): string {
 export { mergeBatch };
 export type { OtlpPayload, OtlpAttribute };
 
-const SDK_VERSION = "0.6.0"; // keep in sync with package.json
+const SDK_VERSION = ADAPTER_VERSION;
 
 /**
  * `''` and `'unknown'` are placeholders, not values. An unfillable field must

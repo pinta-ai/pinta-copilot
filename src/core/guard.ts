@@ -4,6 +4,7 @@
 // disable flag read from process.env, and a `pinta-copilot/<version>` User-Agent.
 import { evaluateGuard as coreEvaluateGuard } from "@pinta-ai/core";
 import type { GuardInput, GuardResult } from "@pinta-ai/core";
+import { ADAPTER_VERSION } from "./version.js";
 
 export type { GuardInput, GuardResult } from "@pinta-ai/core";
 
@@ -14,9 +15,10 @@ function timeoutMs(): number {
 }
 
 // Self-identify to the manager's guard route so it can attribute calls to this
-// adaptor (the route parses `pinta-*/<version>` out of the User-Agent). Keep the
-// version in sync with package.json.
-const GUARD_UA = "pinta-copilot/0.6.0";
+// adaptor (the route parses `pinta-*/<version>` out of the User-Agent). Derived
+// from ADAPTER_VERSION rather than written out: a copy here shipped 0.6.0 on
+// the 0.7.0 release, under a comment telling the reader to keep it in sync.
+const GUARD_UA = `pinta-copilot/${ADAPTER_VERSION}`;
 
 export function evaluateGuard(
   input: GuardInput,
