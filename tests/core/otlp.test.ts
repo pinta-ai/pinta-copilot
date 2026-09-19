@@ -1,3 +1,4 @@
+import { attachGuard } from '@pinta-ai/core';
 import { describe, it, expect } from 'vitest';
 import { buildOtlpPayload } from '../../src/core/otlp';
 
@@ -76,13 +77,14 @@ describe('buildOtlpPayload — copilot', () => {
     expect(r.find((a: any) => a.key === 'member.identity.id')).toBeUndefined();
   });
 
-  it('emits pinta.guard.* when guard provided', () => {
+  it('carries no pinta.guard.* itself; the verdict is attached to the same span afterwards', () => {
     const p = buildOtlpPayload({
       event: { hook_event_name: 'PreToolUse', session_id: 's', cwd: '/t', tool_name: 'bash', tool_input: {} },
       traceId: TRACE,
       surface: 'cli',
-      guard: { decision: 'DENY', reason: 'deny_credentials', userMessage: '⛔ Blocked', durationMs: 8 },
     });
+    expect(p.resourceSpans[0].scopeSpans[0].spans[0].attributes.some((a: any) => a.key.startsWith('pinta.guard.'))).toBe(false);
+    attachGuard(p, { decision: 'DENY', reason: 'deny_credentials', userMessage: null, durationMs: 8 });
     expect(get(p, 'pinta.guard.decision')).toBe('deny');
     expect(get(p, 'pinta.guard.matched_rule')).toBe('deny_credentials');
     expect(get(p, 'pinta.guard.duration_ms')).toBe(8);
