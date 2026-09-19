@@ -2,11 +2,15 @@
 // the historical copilot behavior: a short, env-overridable timeout
 // (PINTA_GUARD_TIMEOUT_MS, default 50ms) to keep the hook snappy, relay token +
 // disable flag read from process.env, and a `pinta-copilot/<version>` User-Agent.
+//
+// Since core 0.8.0 the guard is asked about the OTLP payload the hook is about
+// to relay — the same object, built first — rather than a hand-assembled
+// summary of the event. See `hook.ts`.
 import { evaluateGuard as coreEvaluateGuard } from "@pinta-ai/core";
-import type { GuardInput, GuardResult } from "@pinta-ai/core";
+import type { GuardPayload, GuardResult } from "@pinta-ai/core";
 import { ADAPTER_VERSION } from "./version.js";
 
-export type { GuardInput, GuardResult } from "@pinta-ai/core";
+export type { GuardPayload, GuardResult } from "@pinta-ai/core";
 
 // Guard must be fast or fail-open. 50ms default keeps the hook snappy;
 // override for slower relays (or test harnesses) via PINTA_GUARD_TIMEOUT_MS.
@@ -21,10 +25,10 @@ function timeoutMs(): number {
 const GUARD_UA = `pinta-copilot/${ADAPTER_VERSION}`;
 
 export function evaluateGuard(
-  input: GuardInput,
+  payload: GuardPayload,
   endpoint: string | undefined,
 ): Promise<GuardResult | null> {
-  return coreEvaluateGuard(input, endpoint, {
+  return coreEvaluateGuard(payload, endpoint, {
     timeoutMs: timeoutMs(),
     token: process.env.PINTA_RELAY_TOKEN ?? "",
     disabled: process.env.PINTA_GUARD_DISABLED === "1",

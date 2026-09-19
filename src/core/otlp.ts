@@ -8,7 +8,6 @@ import {
   mergeBatch,
   snakeCase,
   type AttrPolicy,
-  type GuardResult,
   type OtlpAttribute,
   type OtlpPayload,
 } from "@pinta-ai/core";
@@ -206,12 +205,16 @@ function resourceAttrs(event?: RawEvent): OtlpAttribute[] {
   ];
 }
 
+/**
+ * The span for one hook event. Carries no `pinta.guard.*` attributes: the hook
+ * asks the guard about this payload and attaches its verdict afterwards with
+ * core's `attachGuard`, so the judged span and the sent span are one object.
+ */
 export function buildOtlpPayload(args: {
   event: RawEvent;
   traceId: string; // ULID (26 chars)
   surface: Surface;
   now?: number; // ms since epoch; injectable for tests
-  guard?: GuardResult | null;
 }): OtlpPayload {
   return buildPayload({
     traceId: args.traceId,
@@ -220,6 +223,5 @@ export function buildOtlpPayload(args: {
     resource: resourceAttrs(args.event),
     scope: { name: "pinta-copilot", version: SDK_VERSION },
     now: args.now,
-    guard: args.guard,
   });
 }
