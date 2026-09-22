@@ -13,6 +13,8 @@ import {
 } from "@pinta-ai/core";
 import { type RawEvent, eventName } from "./types.js";
 import type { Surface } from "./surface.js";
+import { resolveModel } from "./model.js";
+import { applyModelEvidence } from "./model-evidence.js";
 
 // `os.userInfo()` throws (ENOENT / SystemError) on hosts with no passwd entry
 // for the process uid — containers, CI runners, service accounts. This runs per
@@ -169,12 +171,13 @@ const ATTR_POLICY: AttrPolicy = {
 // Discriminator keys covered by `copilot.hook` — don't re-emit them raw.
 const DISCRIMINATOR_KEYS = new Set(["hook_event_name", "hookEventName", "hookName"]);
 
-function flattenEvent(event: RawEvent, surface: Surface): OtlpAttribute[] {
+function flattenEvent(event: RawEvent, surface: Surface, now: number): OtlpAttribute[] {
   // Bronze flattening: every top-level field → `copilot.<key>`, except the
   // discriminator keys, which are folded into the canonical `copilot.hook`.
   const rest = Object.fromEntries(
     Object.entries(event).filter(([k]) => !DISCRIMINATOR_KEYS.has(k)),
   );
+  applyModelEvidence(rest, resolveModel(event, surface, now));
   return [
     // Discriminator first so aware-backend's detectIngestType hits it cheaply.
     { key: "ingest.type", value: { stringValue: "copilot" } },
@@ -216,12 +219,13 @@ export function buildOtlpPayload(args: {
   surface: Surface;
   now?: number; // ms since epoch; injectable for tests
 }): OtlpPayload {
+  const now = args.now ?? Date.now();
   return buildPayload({
     traceId: args.traceId,
     spanName: `copilot.${snakeCase(eventName(args.event) ?? "unknown")}`,
-    attributes: flattenEvent(args.event, args.surface),
+    attributes: flattenEvent(args.event, args.surface, now),
     resource: resourceAttrs(args.event),
     scope: { name: "pinta-copilot", version: SDK_VERSION },
-    now: args.now,
+    now,
   });
 }

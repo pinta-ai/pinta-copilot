@@ -33,6 +33,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "smoke:import": "node scripts/smoke-import.mjs",
+    "smoke:model": "node scripts/smoke-model.mjs",
     "mock-server": "npx tsx tools/mock-server.ts",
     "install-hooks": "node dist/tools/install-hooks.js",
     "uninstall-hooks": "node dist/tools/install-hooks.js --uninstall",
