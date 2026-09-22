@@ -24,4 +24,4 @@
  * produced by esbuild CLI invocations with no config file, and importing JSON
  * would inline the entire manifest into `dist/`.
  */
-export const ADAPTER_VERSION = "0.8.0";
+export const ADAPTER_VERSION = "0.9.0";

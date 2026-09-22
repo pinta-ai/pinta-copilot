@@ -2,6 +2,26 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.9.0] - 2026-09-22
+
+### Added
+
+- Truthful `copilot.model` telemetry on CLI, editor and cloud hook paths:
+  normalize explicit scalar/ID descriptors, omit placeholders and stringified
+  objects/arrays, and retain source/provider evidence.
+- Bounded, read-only model enrichment tied to the exact session, tool, optional
+  turn and subagent. Fully observed startup selections are labeled separately;
+  ID-less tool hooks and uncorrelated records remain model-less rather than
+  borrowing a session's latest model.
+- CJS/ESM loopback model and SDK-version smoke checks, enforced in PR CI.
+
+### Compatibility
+
+- Still requires Pinta Manager 0.1.11 or later. The OTLP guard payload, denial
+  ordering, event counts and privacy redaction are unchanged; bundled
+  `@pinta-ai/core` remains `^0.8.0`. No new required envelope fields.
+- Selected/requested model evidence is not proof of provider response routing.
+
 ## [0.8.0] - 2026-09-20
 
 ### Changed

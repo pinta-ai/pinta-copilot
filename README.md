@@ -67,6 +67,8 @@ Guard is **fail-open** (no endpoint / timeout / error → allow), so it never br
 | `ingest.type` | `"copilot"` (aware-backend discriminator) |
 | `copilot.hook` | Hook event name (resolved from `hook_event_name` / `hookEventName` / `hookName`) |
 | `copilot.surface` | `cli` \| `ext` \| `cloud` (runtime-detected) |
+| `copilot.model` | Exact host-reported model ID, when attributable; never a placeholder |
+| `copilot.model_source` | Evidence for the model value (see below) |
 | `copilot.<key>` | Every other top-level field (Bronze flattening, raw key preserved) |
 | `service.name` | `"copilot"` · `telemetry.sdk.name` `"pinta-copilot"` |
 
@@ -81,7 +83,54 @@ Guard is **fail-open** (no endpoint / timeout / error → allow), so it never br
 | subagent id | `agent_name`/`agent_display_name` | `agent_id`/`agent_type` |
 | `permissionRequest` | fires | not fired |
 
-Bronze flattening passes both shapes through losslessly; the backend's `CopilotIngestData` normalizes (`tool_response ?? tool_result`, `agent_id ?? agent_name`, …).
+Bronze flattening preserves both shapes, except for the model normalization described below; the backend's `CopilotIngestData` normalizes (`tool_response ?? tool_result`, `agent_id ?? agent_name`, …).
+
+### Model attribution and its limits
+
+`copilot.model` is a scalar ID, not JSON. An explicit hook `model` wins:
+a string or a descriptor's `id` (or `name` when no `id` field exists).
+Blank, `unknown`, `undefined`, `null`, `n/a`, `none`, `auto` and `default`
+values are omitted, case-insensitively. Control characters and IDs longer than
+512 characters are rejected. This does not change the input event or bypass
+redaction. No provider/model is inferred from an agent name, CLI version,
+global model setting, process, or prompt.
+
+JSON-stringified objects/arrays (including `[object Object]`) are not model IDs.
+For an explicit model, the host's `model_source` is retained when supplied;
+otherwise `hook.model` is used. Provider and requested/response fields remain
+unchanged. When transcript evidence replaces an unusable model, its source
+becomes `model_source`; any previous host source is kept as
+`copilot.model_original_source` rather than mislabeled as the new model's source.
+
+| `copilot.model_source` | Evidence and scope |
+|---|---|
+| `hook.model` | The hook's explicit model. A SessionStart selection is **not proof of the routed response model**. |
+| `transcript.assistant.message` | `assistant.message.data.model` on a response requesting the hook's exact tool-call ID. |
+| `transcript.tool.execution_start` / `transcript.tool.execution_complete` | `data.model` on the exact tool execution. Matching assistant/execution records must agree; conflicts are omitted. |
+| `transcript.session.selected` | Startup selection from `session.start.data.selectedModel` plus model changes at/before the hook timestamp, only when the entire bounded history is available. **Selected/requested, not routed.** Never carried onto tools or resume events. |
+
+The CLI lookup uses the supplied `transcript_path`/`transcriptPath`, or
+`$COPILOT_HOME/session-state/<session_id>/events.jsonl` (default home:
+`~/.copilot`). It verifies the session header, timestamp, tool-call ID
+(`tool_use_id`, `toolUseId`, `tool_call_id` or `toolCallId`), an optional turn ID,
+and the exact subagent identity. Parent and child models cannot be inherited
+from one another. A future or merely latest response is never a fallback.
+
+**Many current CLI tool hooks omit a stable tool-call ID. Their model remains
+absent**, even if a session selection or a recent response is visible. A
+subagent ID without its own transcript, an unrecognized IDE/cloud transcript
+format, or a record outside the read window also leaves the model absent.
+IDE/cloud hooks can always supply `model` directly. This is intentionally not
+a claim of complete model coverage for every host version.
+
+Each lookup is read-only: at most a 256 KiB header plus a 1 MiB tail and 4,096
+complete JSONL records, with no subprocess, directory scan, or cross-hook model
+cache. Explicit models and tool hooks without correlation IDs do no model
+lookup IO. Missing/unreadable files, non-regular files, leaf symlinks,
+malformed records and ambiguous metadata fail quietly; incomplete boundary
+lines are ignored. Transcript contents are never logged or forwarded by this
+lookup. Guard behavior, event counts, and the existing privacy pipeline are
+unchanged.
 
 ## Architecture
 
@@ -108,8 +157,16 @@ src/
 npm install
 npm run build         # tsc → dist/
 npm test              # vitest
+npm run smoke:model   # built CJS/ESM hooks -> isolated loopback collector
 npm run mock-server   # local OTLP collector
 ```
+
+`smoke:model` runs fresh hook processes with isolated HOME/plugin data and no
+manager/guard calls. It covers supplied, missing, placeholder, correlated,
+cross-session/subagent, future, partial and oversized transcript cases. Local
+results are written to `.validation/model-smoke.json`. An optional
+`-- --baseline=<previous-built-index.js>` compares paired end-to-end hook times
+(including Node startup and loopback HTTP, so scheduler noise is included).
 
 ## License
 
