@@ -1,15 +1,17 @@
 # pinta-copilot — OTLP forwarder + guard for GitHub Copilot hooks
 
-Converts **GitHub Copilot** hook events into OTLP/HTTP spans and forwards them to any OpenTelemetry-compatible collector, with an optional external **guard** that can allow/deny tool calls. Vendor-neutral. No Pinta CLI dependency. Identity is attached at the relay layer.
+Converts **GitHub Copilot** hook events into OTLP/HTTP spans and forwards them to any OpenTelemetry-compatible collector, with an optional external **guard** for tool calls and their returned contents. Vendor-neutral. No Pinta CLI dependency. Identity is attached at the relay layer.
 
 A **single adapter + a single hook file** covers two surfaces:
 
 | Surface | Hook source | Guard | Notes |
 |---|---|---|---|
-| **Copilot CLI** | `~/.copilot/hooks/pinta-copilot.json` | `preToolUse` **+** `permissionRequest` | `preToolUse` is **fail-closed** |
-| **VS Code extension** (in-editor Copilot Chat) | same `~/.copilot/hooks/` file | `preToolUse` | `preToolUse` is fail-open |
+| **Copilot CLI / SDK** | `~/.copilot/hooks/pinta-copilot.json` | `preToolUse`, `permissionRequest`, `postToolUse` | Denied successful output is replaced before the model receives it |
+| **VS Code Local harness** (in-editor Copilot Chat) | same `~/.copilot/hooks/` file | `PreToolUse`, `PostToolUse` | Denied successful output stops the current run |
 
-> Cloud agent (`.github/hooks/`) is out of scope for now.
+> Automatic cloud hook installation (`.github/hooks/`) remains out of scope.
+> When registered there, the output response uses the Copilot CLI/SDK contract.
+> VS Code Agent Host Copilot also uses that contract, not the Local harness one.
 
 ## Why it works with no VS Code setup
 
@@ -17,7 +19,7 @@ The VS Code Copilot extension reads the **same** `~/.copilot/hooks/` file the CL
 
 ## ⚠️ Fail-closed safety
 
-Copilot's **CLI `preToolUse` hook is fail-closed**: a non-zero exit, crash, or timeout *denies* the tool — and a crashing hook blocks `report_intent`/`ask_user` too, bricking the whole agent turn. This adapter therefore **always exits 0** on every path; transport and guard failures are absorbed (telemetry fail-open). Do not patch in code paths that can throw past the top-level handler.
+Copilot's **CLI `preToolUse` command errors are fail-closed**: a non-zero exit or crash can deny the tool and disrupt internal control tools. Timeouts are a separate host boundary and can fail open. This adapter therefore **always exits 0** on every path; transport and guard failures are reported on stderr rather than thrown past the top-level handler. Guard timeout/error behavior remains fail-open.
 
 ## Install
 
@@ -48,7 +50,7 @@ PINTA_GUARD_ENDPOINT=https://your-relay.example.com/guard
 |---|---|
 | `COPILOT_PLUGIN_OPTION_ENDPOINT` | Full OTLP/HTTP traces URL. **Namespaced to avoid colliding with Copilot's native OTel** (`OTEL_EXPORTER_OTLP_*`). The standard `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_ENDPOINT` are honored as a lower-priority fallback. |
 | `COPILOT_PLUGIN_OPTION_HEADERS` | `key=val,key=val` request headers (auth). Falls back to `OTEL_EXPORTER_OTLP_HEADERS`. |
-| `PINTA_GUARD_ENDPOINT` | Optional. POST'd on `preToolUse`/`permissionRequest`; a `DENY` response blocks the tool. |
+| `PINTA_GUARD_ENDPOINT` | Optional. POST'd before tool execution and on successful `postToolUse`. `DENY` gates the call or its returned output, respectively. |
 | `COPILOT_HOME` | Overrides `~/.copilot` for hook + env-file paths. |
 
 ## Guard (allow / deny + reason)
@@ -60,6 +62,63 @@ On `preToolUse` (all surfaces) and `permissionRequest` (CLI only) the adapter qu
 
 Guard is **fail-open** (no endpoint / timeout / error → allow), so it never breaks a session.
 
+Once a `DENY` is decided, the hook does **not** wait for collector IO. It emits
+the enforcement response, appends the original redacted span to the existing
+local retry queue, and finishes. This applies to before-tool, permission, and
+after-tool denials: otherwise a collector delay can cause the host to time out
+and discard even an already-written denial. The next eligible telemetry hook
+flushes the queued span with its original IDs and evidence. Backend visibility
+can therefore be delayed until that hook; a stopped run may need a new session
+to trigger delivery. No span is queued when telemetry is disabled. Local
+persistence failures are reported without discarding the enforcement response.
+
+### Successful tool-output enforcement
+
+Before-tool hooks cannot inspect contents that the tool has not returned yet.
+`PostToolUse` now sends the original redaction-aware OTLP payload to the same
+guard. On `DENY`, the adapter emits the host's supported response and defers
+network telemetry as described above:
+
+- **Copilot CLI/SDK/cloud:** `modifiedResult` with `resultType: "success"` and
+  a fixed, safe `textResultForLlm` replaces the denied result.
+- **VS Code Local:** `continue: false` with a fixed `stopReason` stops the run.
+
+The native `tool_result`/`toolResult` shape takes precedence over inherited
+editor environment variables; Copilot SDK sessions inside VS Code must not
+receive a Local-only stop response. Local `tool_response` uses the stop
+contract. Both snake_case and camelCase input forms are supported; response
+keys use the documented casing.
+
+Keep the generated hook registration's per-command
+`env: { "PINTA_COPILOT_EVENT": "PostToolUse" }` binding. Some native Copilot
+payloads omit every event-name field. The installer and Manager bind each
+registered event explicitly; custom registrations must do the same, using the
+matching name for each hook, **not one global value for all events**. Without
+either a discriminator or that binding, the event remains unknown and cannot
+be guarded. Tool-result contents are not used to guess the firing event.
+
+No untrusted output or guard-supplied reason is echoed into either response.
+The original masked/truncated input and output remain on the same telemetry
+span and `spanId`, together with the verdict and
+`pinta.guard.target = "tool_output"`. The tool **already ran**: withholding a
+result or stopping a run does not undo its effects. For the Local stop path,
+the result may remain in the transcript; start a new session, not a resumed
+tainted conversation.
+
+`ALLOW`, `REVIEW`, inactive guarding and existing fail-open behavior are
+unchanged. Internal control tools remain telemetry-only.
+`PostToolUseFailure` remains telemetry-only: this gate covers successful
+results, not failed-tool error content.
+
+Enforcement requires synchronous hooks, a host honoring the documented
+[Copilot result-replacement](https://docs.github.com/en/copilot/reference/hooks-reference#posttooluse-output)
+or [VS Code Local stop](https://code.visualstudio.com/docs/agents/reference/hooks-reference)
+contract, and completion within the host timeout. Added context, a
+PreToolUse-shaped denial, or exit code 2 alone is not output withholding.
+Deploy the corresponding guard-runtime projection update to Manager and
+backend before rolling out these adapters: older readers can miss native
+camelCase result fields or confuse output denial with a prevented tool call.
+
 ## Span conventions
 
 | Attribute | Value |
@@ -70,6 +129,7 @@ Guard is **fail-open** (no endpoint / timeout / error → allow), so it never br
 | `copilot.model` | Exact host-reported model ID, when attributable; never a placeholder |
 | `copilot.model_source` | Evidence for the model value (see below) |
 | `copilot.<key>` | Every other top-level field (Bronze flattening, raw key preserved) |
+| `pinta.guard.target` | `tool_output` for a non-null successful after-tool verdict; absent on before-tool gates |
 | `service.name` | `"copilot"` · `telemetry.sdk.name` `"pinta-copilot"` |
 
 ### CLI ↔ ext payload differences (absorbed by the adapter)
@@ -160,6 +220,11 @@ npm test              # vitest
 npm run smoke:model   # built CJS/ESM hooks -> isolated loopback collector
 npm run mock-server   # local OTLP collector
 ```
+
+The integration suite exercises both built CJS/ESM entrypoints against a
+loopback guard and collector: native/legacy result casing, CLI/cloud/Local
+contracts, retained original evidence, nonblocking verdicts and transport
+failures. Hook unit tests also pin denial-before-telemetry ordering.
 
 `smoke:model` runs fresh hook processes with isolated HOME/plugin data and no
 manager/guard calls. It covers supplied, missing, placeholder, correlated,

@@ -43,10 +43,11 @@ describe('types — 3-way discriminator + field absorption', () => {
     }
   });
 
-  it('guard fires on PreToolUse + PermissionRequest only', () => {
+  it('guard fires before tools and on successful tool results', () => {
     expect(isGuardEvent('PreToolUse')).toBe(true);
     expect(isGuardEvent('PermissionRequest')).toBe(true);
-    expect(isGuardEvent('PostToolUse')).toBe(false);
+    expect(isGuardEvent('PostToolUse')).toBe(true);
+    expect(isGuardEvent('PostToolUseFailure')).toBe(false);
     expect(isGuardEvent('Stop')).toBe(false);
   });
 
@@ -62,7 +63,42 @@ describe('types — 3-way discriminator + field absorption', () => {
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'r' },
     });
     expect(JSON.parse(formatDeny('PermissionRequest', 'r')!)).toEqual({ behavior: 'deny', message: 'r' });
-    expect(formatDeny('PostToolUse', 'r')).toBeNull();
+    expect(formatDeny('PostToolUseFailure', 'r')).toBeNull();
+    expect(formatDeny('Stop', 'r')).toBeNull();
+  });
+
+  it.each(['cli', 'cloud'] as const)('replaces denied %s output without leaking the guard reason', (surface) => {
+    const result = formatDeny('PostToolUse', 'UNTRUSTED_REASON_CANARY', surface)!;
+    expect(JSON.parse(result)).toEqual({
+      modifiedResult: {
+        resultType: 'success',
+        textResultForLlm: expect.stringContaining('Pinta AI withheld this tool output'),
+      },
+    });
+    expect(result).not.toContain('UNTRUSTED_REASON_CANARY');
+    expect(result).toContain('The tool already ran');
+  });
+
+  it('stops the Local extension without claiming to erase its retained result', () => {
+    const result = formatDeny('PostToolUse', 'UNTRUSTED_REASON_CANARY', 'ext')!;
+    expect(JSON.parse(result)).toEqual({
+      continue: false,
+      stopReason: expect.stringContaining('start a new session'),
+    });
+    expect(result).not.toContain('UNTRUSTED_REASON_CANARY');
+    expect(result).toContain('original output may remain in the transcript');
+  });
+
+  it.each(['tool_result', 'toolResult'])('prefers native %s over inherited editor env', (key) => {
+    const result = formatDeny('PostToolUse', 'r', 'ext', { [key]: {} })!;
+    expect(JSON.parse(result)).toHaveProperty('modifiedResult.resultType', 'success');
+    expect(JSON.parse(result)).not.toHaveProperty('continue');
+  });
+
+  it('honors a Local result even without extension environment markers', () => {
+    const result = formatDeny('PostToolUse', 'r', 'cli', { tool_response: {} })!;
+    expect(JSON.parse(result)).toHaveProperty('continue', false);
+    expect(JSON.parse(result)).not.toHaveProperty('modifiedResult');
   });
 });
 
