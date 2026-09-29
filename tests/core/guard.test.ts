@@ -143,6 +143,35 @@ describe('evaluateGuard', () => {
   });
 
   /**
+   * The manager bounds its own work by the caller's timeout and spends 80% of
+   * it. Without this header it reads copilot's timeout from a table copied
+   * into its own repo, which cannot see PINTA_GUARD_TIMEOUT_MS (PTA-579). So
+   * the value on the wire must be the timeout this call actually runs under,
+   * env override included — core >=0.9.0 sends it.
+   */
+  it('declares its effective timeout to the manager as x-pinta-guard-budget-ms', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ decision: 'ALLOW', reason: null, durationMs: 1 }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ));
+    globalThis.fetch = fetchMock as never;
+    const budget = (i: number) =>
+      ((fetchMock.mock.calls[i]?.[1] as RequestInit).headers as Record<string, string>)['x-pinta-guard-budget-ms'];
+    const prev = process.env.PINTA_GUARD_TIMEOUT_MS;
+    try {
+      delete process.env.PINTA_GUARD_TIMEOUT_MS;
+      await evaluateGuard(payload(), 'http://127.0.0.1:5147/guard/evaluate');
+      process.env.PINTA_GUARD_TIMEOUT_MS = '250';
+      await evaluateGuard(payload(), 'http://127.0.0.1:5147/guard/evaluate');
+    } finally {
+      if (prev === undefined) delete process.env.PINTA_GUARD_TIMEOUT_MS;
+      else process.env.PINTA_GUARD_TIMEOUT_MS = prev;
+    }
+    expect(budget(0)).toBe('100');
+    expect(budget(1)).toBe('250');
+  });
+
+  /**
    * The body is the OTLP payload itself — no `{input}` envelope. The manager
    * projects it through the same AgentEvent assembly the backend stores it
    * with (core >=0.8.0), so the working directory and the event reach the
