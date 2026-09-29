@@ -4,6 +4,8 @@ All notable changes to pinta-copilot are documented here.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-30
+
 ### Changed
 
 - The guard timeout default is 100ms, up from 50ms (PTA-579). 50ms failed open
