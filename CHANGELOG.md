@@ -2,7 +2,9 @@
 
 All notable changes to pinta-copilot are documented here.
 
-## [0.9.1] - 2026-09-29
+## [Unreleased]
+
+## [0.10.1] - 2026-09-29
 
 ### Fixed
 
@@ -37,6 +39,19 @@ All notable changes to pinta-copilot are documented here.
 - Roll out the corresponding guard-runtime projection update to Manager and
   backend first, so native result casing and output-versus-execution outcomes
   are interpreted correctly.
+## [0.10.0] - 2026-09-30
+
+### Changed
+
+- The guard timeout default is 100ms, up from 50ms (PTA-579). 50ms failed open
+  on healthy calls — a fresh hook process's first fetch runs past it — and the
+  gate then allowed the call with no verdict. `PINTA_GUARD_TIMEOUT_MS` still
+  overrides it.
+- With `@pinta-ai/core` 0.9.0 the effective timeout, env override included, is
+  sent to the manager as `x-pinta-guard-budget-ms`. The manager bounds its own
+  work (the backend package check) to 80% of that value instead of reading
+  copilot's budget from a copy of the old default kept in its own repo, which
+  gave up on the package check at 40ms whatever this adaptor waited.
 
 ## [0.9.0] - 2026-09-22
 
