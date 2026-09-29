@@ -3,8 +3,10 @@
 // One stdin/stdout contract is shared by all three surfaces, but the payload
 // SHAPE differs (verified 2026-06-08, BACKGROUND_RESEARCH §9.6/§9.7):
 //
-//   • CLI  : snake_case, discriminator `hook_event_name`; PostToolUse carries
-//            `tool_result` (structured); NO `tool_use_id`; `transcript_path`
+//   • CLI  : PascalCase registrations use snake_case and `hook_event_name`;
+//            native camelCase registrations omit that discriminator and need
+//            the event-specific registration binding. PostToolUse carries
+//            `tool_result` / `toolResult` (structured); NO `tool_use_id`; `transcript_path`
 //            only on Stop; SessionStart has `initial_prompt`; Stop has
 //            `stop_reason`; subagent uses `agent_name`/`agent_display_name`.
 //            permissionRequest is a DIFFERENT schema: camelCase with
@@ -34,8 +36,8 @@ function str(v: unknown): string | undefined {
  *  - snake `hook_event_name` (CLI/ext most events)
  *  - camel `hookEventName`
  *  - `hookName` (CLI permissionRequest)
- *  - NONE AT ALL — CLI `subagentStart` ships only camelCase agent fields with
- *    no event-name key (verified 2026-06-08, real adapter e2e).
+ *  - NONE AT ALL — native camelCase registrations, including preToolUse and
+ *    postToolUse, omit the discriminator.
  *
  * Final fallback: `PINTA_COPILOT_EVENT`, which `install-hooks` stamps into each
  * hook entry's `env` block (Copilot passes hook `env` through to the process —
@@ -132,7 +134,7 @@ export function isGuardEvent(kind: EventKind): boolean {
  * denying them would brick the turn without security benefit (they also fire
  * preToolUse, observed in §9.6). The span is still emitted; guard is skipped.
  */
-const INTERNAL_TOOLS: ReadonlySet<string> = new Set(["report_intent", "ask_user"]);
+const INTERNAL_TOOLS: ReadonlySet<string> = new Set(["report_intent", "ask_user", "AskUserQuestion"]);
 
 export function isInternalTool(name: string | undefined): boolean {
   return name !== undefined && INTERNAL_TOOLS.has(name);
@@ -159,11 +161,15 @@ export function formatDeny(
   event?: RawEvent,
 ): string | null {
   if (kind === "PreToolUse") {
+    const decision = { permissionDecision: "deny", permissionDecisionReason: reason };
+    // Native camelCase hooks ignore the PascalCase hookSpecificOutput envelope.
+    if (event && eventName(event) === "preToolUse") {
+      return JSON.stringify(decision);
+    }
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: reason,
+        ...decision,
       },
     });
   }
