@@ -23,7 +23,7 @@ import { copilotHome } from "../core/config.js";
 const HOOK_FILE = "pinta-copilot.json";
 
 // Every event routes to the single adapter binary; it branches internally
-// (telemetry for all; guard deny on PreToolUse + permissionRequest).
+// (telemetry for all; guard on PreToolUse + permissionRequest + PostToolUse).
 const EVENTS = [
   "SessionStart",
   "SessionEnd",

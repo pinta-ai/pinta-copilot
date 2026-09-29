@@ -21,7 +21,7 @@ import {
   sessionId as getSessionId,
   toolName as getToolName,
 } from "./core/types.js";
-import { Transport } from "./core/transport.js";
+import { deferPayload, Transport } from "./core/transport.js";
 import { TraceManager } from "./core/trace.js";
 import { buildOtlpPayload } from "./core/otlp.js";
 import { evaluateGuard } from "./core/guard.js";
@@ -41,9 +41,6 @@ export async function runHook(): Promise<number> {
     const kind = classify(event);
     const sid = getSessionId(event);
 
-    const transport = new Transport(config);
-    await transport.flush(); // drain retry queue first
-
     const trace = new TraceManager(config);
     // UserPromptSubmit starts a new per-turn trace; everything else reuses it.
     const traceId =
@@ -58,9 +55,8 @@ export async function runHook(): Promise<number> {
     // the span and not in the summary.
     const payload = buildOtlpPayload({ event, traceId, surface });
 
-    // Guard runs on the two tool-gating events (PreToolUse: all surfaces;
-    // PermissionRequest: CLI-only). Internal agent tools (report_intent,
-    // ask_user) are telemetry-only — never guarded (would brick the turn).
+    // Before-tool gates cannot inspect a result that does not exist yet.
+    // PostToolUse judges the original result before the host continues.
     const toolNm = getToolName(event);
     let guard = null;
     if (isGuardEvent(kind) && !isInternalTool(toolNm)) {
@@ -72,13 +68,28 @@ export async function runHook(): Promise<number> {
     // telemetry block below must not be able to discard an already-decided
     // DENY via the outer catch — that would silently ALLOW a denied tool.
     if (guard?.decision === "DENY") {
-      const out = formatDeny(kind, guard.userMessage ?? guard.reason ?? "guard_deny");
+      const out = formatDeny(kind, guard.userMessage ?? guard.reason ?? "guard_deny", surface, event);
       if (out) process.stdout.write(out + "\n");
     }
 
     // Best-effort, strictly after the enforcement decision has been emitted.
     // The verdict rides on the span the guard judged — same spanId.
     attachGuard(payload, guard);
+    if (guard && kind === "PostToolUse") {
+      for (const resource of payload.resourceSpans) {
+        for (const scope of resource.scopeSpans) {
+          for (const span of scope.spans) {
+            span.attributes.push({ key: "pinta.guard.target", value: { stringValue: "tool_output" } });
+          }
+        }
+      }
+    }
+    if (guard?.decision === "DENY") {
+      deferPayload(payload, config);
+      return 0;
+    }
+    const transport = new Transport(config);
+    await transport.flush();
     await transport.send(payload);
   } catch (err) {
     process.stderr.write(`[pinta-copilot] error: ${err}\n`);

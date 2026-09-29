@@ -4,6 +4,41 @@ All notable changes to pinta-copilot are documented here.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-29
+
+### Fixed
+
+- Evaluate successful `PostToolUse` results with the same guard and original
+  redaction-aware OTLP payload used for telemetry.
+- Withhold denied CLI/SDK/cloud results using the supported `modifiedResult`
+  contract; stop VS Code Local runs using `continue: false`. Native result
+  shape takes precedence over environment-only surface detection.
+- Use fixed English messages, never untrusted result text or guard reasons.
+- Finish every decided DENY without network telemetry. Persist the original
+  redacted span in the existing retry queue for the next eligible hook, so a
+  delayed collector cannot cause the host to time out and discard the denial.
+  This also protects existing before-tool and permission denials. Telemetry
+  disabled/guard-only mode does not retain a queued span.
+- Preserve original evidence and span identity, adding
+  `pinta.guard.target = "tool_output"` rather than claiming that an already
+  executed tool was prevented. Apply the existing payload redaction context
+  equally to native `toolArgs`/`toolResult` casing.
+- Add CJS/ESM native-stdin regressions and ordering/error-path coverage.
+
+### Compatibility
+
+- Requires the host's synchronous successful-output hook contract; completion
+  before host timeout is still necessary. Before-tool/permission gating,
+  internal tools, failed-tool telemetry, ALLOW/REVIEW and guard fail-open
+  behavior remain unchanged. No policy thresholds change.
+- A Local stop does not clear its transcript or make resume safe; start a new
+  session. No persistent session quarantine or automatic context clearing is
+  introduced.
+- Denied-span backend visibility is deferred until a later telemetry hook;
+  after a stopped run this may be a new session.
+- Roll out the corresponding guard-runtime projection update to Manager and
+  backend first, so native result casing and output-versus-execution outcomes
+  are interpreted correctly.
 ## [0.10.0] - 2026-09-30
 
 ### Changed

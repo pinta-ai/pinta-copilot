@@ -19,6 +19,8 @@
 // so we do NOT enumerate every field. We only normalize the handful used for
 // routing / guard / trace, absorbing both casings + both discriminator keys.
 
+import type { Surface } from "./surface.js";
+
 export interface RawEvent {
   [key: string]: unknown;
 }
@@ -118,10 +120,9 @@ export function classify(e: RawEvent): EventKind {
   return KIND_MAP[n.toLowerCase()] ?? "Unknown";
 }
 
-/** Guard runs on the two tool-gating events. PreToolUse fires on all surfaces;
- *  PermissionRequest is CLI-only (ext has no such event → entry is ignored). */
+/** Successful results must be judged after the tool, when their contents exist. */
 export function isGuardEvent(kind: EventKind): boolean {
-  return kind === "PreToolUse" || kind === "PermissionRequest";
+  return kind === "PreToolUse" || kind === "PermissionRequest" || kind === "PostToolUse";
 }
 
 /**
@@ -137,14 +138,26 @@ export function isInternalTool(name: string | undefined): boolean {
   return name !== undefined && INTERNAL_TOOLS.has(name);
 }
 
-// --- Hook deny output formats (one per gating event) ---
+const WITHHELD_OUTPUT =
+  "Pinta AI withheld this tool output because it matched a blocking policy. " +
+  "The tool already ran. Do not retry this operation to bypass the block.";
+const STOP_REASON =
+  "Pinta AI stopped this run because a tool output matched a blocking policy. " +
+  "The tool already ran and its original output may remain in the transcript. " +
+  "Review the incident and start a new session instead of resuming this one.";
 
 /**
  * Render the deny decision in the format the firing event expects, or null if
  * the event isn't a gating event. preToolUse uses `permissionDecision`; the CLI
- * permission service uses `behavior`/`message`.
+ * permission service uses `behavior`/`message`. After-tool responses never echo
+ * a guard reason: it may contain text derived from the untrusted tool output.
  */
-export function formatDeny(kind: EventKind, reason: string): string | null {
+export function formatDeny(
+  kind: EventKind,
+  reason: string,
+  surface: Surface = "cli",
+  event?: RawEvent,
+): string | null {
   if (kind === "PreToolUse") {
     return JSON.stringify({
       hookSpecificOutput: {
@@ -156,6 +169,16 @@ export function formatDeny(kind: EventKind, reason: string): string | null {
   }
   if (kind === "PermissionRequest") {
     return JSON.stringify({ behavior: "deny", message: reason });
+  }
+  if (kind === "PostToolUse") {
+    // Copilot's SDK can run inside VS Code; editor env alone is not its protocol.
+    const copilotResult = event !== undefined && ("tool_result" in event || "toolResult" in event);
+    const localResult = event !== undefined && "tool_response" in event;
+    return !copilotResult && (localResult || surface === "ext")
+      ? JSON.stringify({ continue: false, stopReason: STOP_REASON })
+      : JSON.stringify({
+          modifiedResult: { resultType: "success", textResultForLlm: WITHHELD_OUTPUT },
+        });
   }
   return null;
 }

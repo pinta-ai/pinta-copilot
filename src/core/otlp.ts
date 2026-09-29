@@ -159,8 +159,8 @@ const SKIP_REDACT_KEYS: ReadonlySet<string> = new Set([
 
 /** Keys that may carry shell command / tool payload text → bash redaction context. */
 const BASH_CONTEXT_KEYS: ReadonlySet<string> = new Set([
-  "copilot.tool_input", "copilot.toolInput",
-  "copilot.tool_response", "copilot.tool_result",
+  "copilot.tool_input", "copilot.toolInput", "copilot.toolArgs",
+  "copilot.tool_response", "copilot.tool_result", "copilot.toolResult",
 ]);
 
 const ATTR_POLICY: AttrPolicy = {
