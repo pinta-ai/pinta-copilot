@@ -145,7 +145,7 @@ src/
 │   ├── trace.ts          # per-turn ULID trace, keyed by session_id
 │   ├── transport.ts      # POST OTLP/HTTP traces (reads OTel env at call time)
 │   ├── retry-queue.ts    # file-backed JSONL queue, flushed next invocation
-│   ├── guard.ts          # POST PINTA_GUARD_ENDPOINT (50ms), fail-open
+│   ├── guard.ts          # POST PINTA_GUARD_ENDPOINT (100ms), fail-open
 │   ├── redact.ts         # Tier-1 redaction + Tier-3 truncation
 │   ├── config.ts / env-bridge.ts
 └── tools/install-hooks.ts  # write/remove ~/.copilot/hooks/pinta-copilot.json
