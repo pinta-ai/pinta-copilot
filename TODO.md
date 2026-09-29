@@ -26,6 +26,6 @@ Code for all four layers is implemented, verified, and pushed (see
 
 - [ ] `tools/setup.ts` — one-shot interactive installer (endpoint/token → build → install-hooks), like pinta-codex.
 - [ ] Decide the **dist strategy**: the local hook points at `dist/index.js`, which git ops can wipe (→ fail-closed). CI (`build-dist`) force-commits `dist/` to `main`; managed installs use the npm tarball's stable path. Either keep this, or pin the hook to a stable installed location.
-- [ ] Raise the guard default timeout (currently 50ms; cold-process first fetch can approach ~60ms). For now set `PINTA_GUARD_TIMEOUT_MS` per deployment (live = 300ms).
+- [x] Raise the guard default timeout (50ms → 100ms, PTA-579; cold-process first fetch can approach ~60ms). `PINTA_GUARD_TIMEOUT_MS` still overrides per deployment, and core >=0.9.0 tells the manager the effective value.
 - [ ] Bonus surfaces / experiments (see golden doc `../copilot-cli/BACKGROUND_RESEARCH.md` §11.2): native OTel passthrough (KU12), Claude-format hooks parsing (KU13), cloud agent (`.github/hooks/`, currently out of scope).
 - [ ] Clean stale `.claude/worktrees/*` and other untracked junk out of the sibling repos before merging (was accidentally swept into a commit once and removed).

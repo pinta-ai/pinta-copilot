@@ -85,6 +85,64 @@ describe('evaluateGuard', () => {
   });
 
   /**
+   * How long the hook waits before it fail-opens: the moment core aborts the
+   * fetch. Measured on the wire rather than read off a constant, so it is the
+   * value core actually runs under — and, from core 0.9.0, the value it
+   * declares to the manager as `x-pinta-guard-budget-ms` (PTA-579).
+   */
+  async function abortedAfterMs(): Promise<number> {
+    vi.useFakeTimers();
+    try {
+      let abortedAt = -1;
+      globalThis.fetch = vi.fn(
+        (_url: unknown, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              abortedAt = Date.now();
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      ) as never;
+      const start = Date.now();
+      const pending = evaluateGuard(payload(), 'http://127.0.0.1:5147/guard/evaluate');
+      await vi.advanceTimersByTimeAsync(10_000);
+      const r = await pending;
+      expect(r?.failOpenReason).toBe('timeout');
+      return abortedAt - start;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  /**
+   * 50ms failed open on healthy calls: a fresh hook process's first fetch runs
+   * past it (normal-response p99 was 58ms on prod codex), and the manager then
+   * gave up on the package check at 40ms. 100ms clears the observed tail.
+   */
+  it('waits 100ms by default before failing open', async () => {
+    const prev = process.env.PINTA_GUARD_TIMEOUT_MS;
+    delete process.env.PINTA_GUARD_TIMEOUT_MS;
+    try {
+      expect(await abortedAfterMs()).toBe(100);
+    } finally {
+      if (prev !== undefined) process.env.PINTA_GUARD_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('lets PINTA_GUARD_TIMEOUT_MS override the default', async () => {
+    const prev = process.env.PINTA_GUARD_TIMEOUT_MS;
+    process.env.PINTA_GUARD_TIMEOUT_MS = '250';
+    try {
+      expect(await abortedAfterMs()).toBe(250);
+    } finally {
+      if (prev === undefined) delete process.env.PINTA_GUARD_TIMEOUT_MS;
+      else process.env.PINTA_GUARD_TIMEOUT_MS = prev;
+    }
+  });
+
+  /**
    * The body is the OTLP payload itself — no `{input}` envelope. The manager
    * projects it through the same AgentEvent assembly the backend stores it
    * with (core >=0.8.0), so the working directory and the event reach the

@@ -106,7 +106,7 @@ On `preToolUse` (all surfaces) and `permissionRequest` (CLI only) the adaptor qu
 Both gates are registered; each surface fires only the ones it supports (ext silently ignores `permissionRequest`). The decision is deterministic, so the two gates agree (defense-in-depth on CLI).
 
 - **Internal tools are telemetry-only.** `report_intent` and `ask_user` are the agent's own control tools; denying them bricks the turn with no security benefit, so guard is skipped for them (the span is still emitted).
-- **Fail-open**: no endpoint / timeout / non-2xx → allow. The client timeout is 50ms by default (keeps the hook snappy), overridable via `PINTA_GUARD_TIMEOUT_MS` (a cold node process's first fetch can approach ~60ms against a local relay, so a small bump is recommended for reliable enforcement).
+- **Fail-open**: no endpoint / timeout / non-2xx → allow. The client timeout is 100ms by default (keeps the hook snappy while clearing a cold node process's first fetch, which can approach ~60ms against a local relay), overridable via `PINTA_GUARD_TIMEOUT_MS`. With `@pinta-ai/core` >=0.9.0 the effective value is sent to the manager as `x-pinta-guard-budget-ms`, so the manager budgets its own work to the same number.
 - **Works with Pinta Manager unchanged.** Verified live: the adaptor's request shape matches Manager's `POST /guard/evaluate`; a real policy rule (`deny_resource_destruction`) returned a real `DENY` with `⛔ Blocked by Pinta AI — <rule>`. Manager's relay and guard are adaptor-agnostic, so no Manager code change is needed.
 
 ---
@@ -191,7 +191,7 @@ DynamoDB needs no infra change (single schemaless table, `COPILOTSPAN#` prefix, 
 ## 11. Operational notes
 
 - **`dist/` is load-bearing for local installs.** The hook points at `dist/index.js`; git operations (branch switches, merges) can wipe the untracked `dist/`, and a missing `dist/` makes the CLI hook fail-closed (blocks all tools). Run `npm run build` / `npm run doctor` after git operations. Managed installs use the published npm tarball's stable path and don't have this issue. `dist/` is gitignored locally; CI (`build-dist`) force-commits it to `main`.
-- **Guard timeout.** Default 50ms can fail-open on a cold process's first fetch; set `PINTA_GUARD_TIMEOUT_MS` (e.g. 300) for reliable enforcement.
+- **Guard timeout.** Default 100ms (was 50ms, which failed open on a cold process's first fetch). Raise `PINTA_GUARD_TIMEOUT_MS` further for slow relays; the manager follows the value via `x-pinta-guard-budget-ms` (core >=0.9.0).
 
 ---
 
