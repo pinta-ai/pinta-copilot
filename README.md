@@ -55,10 +55,16 @@ PINTA_GUARD_ENDPOINT=https://your-relay.example.com/guard
 
 ## Guard (allow / deny + reason)
 
-On `preToolUse` (all surfaces) and `permissionRequest` (CLI only) the adapter queries `PINTA_GUARD_ENDPOINT`. A `DENY` is emitted in the surface-appropriate format and the reason is shown to the model/user:
+On `preToolUse` (all surfaces) and `permissionRequest` (CLI only) the adapter queries `PINTA_GUARD_ENDPOINT`. A `DENY` is emitted in the registration's protocol format and the reason is shown to the model/user:
 
-- `preToolUse` → `{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<reason>" } }`
+- Native camelCase `preToolUse` → `{ "permissionDecision": "deny", "permissionDecisionReason": "<reason>" }`
+- PascalCase `PreToolUse` → `{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<reason>" } }`
 - `permissionRequest` → `{ "behavior": "deny", "message": "<reason>" }`
+
+Copilot CLI 1.0.88 ignores the nested PascalCase denial on a native camelCase
+hook. The adapter selects the response from the explicit event discriminator
+or trusted per-hook `PINTA_COPILOT_EVENT` binding, not from tool-input contents.
+Preserve the registered spelling in that binding.
 
 Guard is **fail-open** (no endpoint / timeout / error → allow), so it never breaks a session.
 
@@ -106,9 +112,22 @@ the result may remain in the transcript; start a new session, not a resumed
 tainted conversation.
 
 `ALLOW`, `REVIEW`, inactive guarding and existing fail-open behavior are
-unchanged. Internal control tools remain telemetry-only.
-`PostToolUseFailure` remains telemetry-only: this gate covers successful
-results, not failed-tool error content.
+unchanged. Internal control tools `report_intent`, `ask_user` and its documented
+PascalCase alias `AskUserQuestion` remain telemetry-only. Arbitrary case variants
+or similarly named MCP tools are not exempt.
+
+**Native failed-result enforcement is unsupported.** `PostToolUseFailure`
+remains telemetry-only, not a protected phase. In native Copilot CLI 1.0.88,
+the failure hook fires for a failed `view`, but both `continue: false` and
+`modifiedResult` are ignored and the original error reaches the next model
+request. The hook's `error` may also be less complete than the model-facing
+result. A future supported host failure-result/batch contract is required;
+printing a denial alone would falsely claim protection.
+
+Ordinary shell exit status 1 is a different case: Copilot delivers that
+result through successful `PostToolUse`, so it is eligible for the existing
+successful-result gate. Native hook phase, not a guessed exit-code pattern,
+determines which contract applies.
 
 Enforcement requires synchronous hooks, a host honoring the documented
 [Copilot result-replacement](https://docs.github.com/en/copilot/reference/hooks-reference#posttooluse-output)

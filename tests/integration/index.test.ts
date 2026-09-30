@@ -117,6 +117,42 @@ const POST = {
 describe.each(["index.js", "index.mjs"])("%s output guard integration", (entry) => {
   const adapter = path.resolve("dist", entry);
 
+  it("denies native camelCase preToolUse with the host-consumed top-level dialect", async () => {
+    const event = {
+      sessionId: "pre-native", cwd: "/test", toolName: "view",
+      toolArgs: { path: "/test/fixture.txt" },
+    };
+    const { code, stdout, pluginData } = await run(JSON.stringify(event), adapter, {
+      PINTA_COPILOT_EVENT: "preToolUse",
+    });
+
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      permissionDecision: "deny", permissionDecisionReason: "Blocked by Pinta",
+    });
+    expect(guardPayloads).toHaveLength(1);
+    expect(sentPayloads).toHaveLength(0);
+    const queued = new DiskRetryQueue(pluginData, "pinta-copilot-test").readAll();
+    expect(queued).toHaveLength(1);
+    const judged = guardPayloads[0].resourceSpans[0].scopeSpans[0].spans[0];
+    const emitted = queued[0].payload.resourceSpans[0].scopeSpans[0].spans[0];
+    expect(emitted.spanId).toBe(judged.spanId);
+    expect(emitted.traceId).toBe(judged.traceId);
+    expect(emitted.attributes).toEqual(expect.arrayContaining(judged.attributes));
+    expect(JSON.stringify(emitted)).not.toContain("pinta.guard.target");
+  });
+
+  it("does not guard the documented PascalCase internal AskUserQuestion alias", async () => {
+    const { code, stdout } = await run(JSON.stringify({
+      hook_event_name: "PreToolUse", session_id: "internal-alias", cwd: "/test",
+      tool_name: "AskUserQuestion", tool_input: { questions: [] },
+    }), adapter);
+    expect(code).toBe(0);
+    expect(stdout).toBe("");
+    expect(guardPayloads).toHaveLength(0);
+    expect(sentPayloads).toHaveLength(1);
+  });
+
   it.each<[string, Record<string, unknown>, string, NodeJS.ProcessEnv]>([
     ["native PascalCase", POST, "copilot.tool_result", {}],
     ["native camelCase", {

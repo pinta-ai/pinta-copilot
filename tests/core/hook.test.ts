@@ -61,7 +61,10 @@ beforeEach(() => {
   stdin(EVENT);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("successful output enforcement", () => {
   it("judges and defers the original span, not the safe model-facing replacement", async () => {
@@ -118,6 +121,21 @@ describe("successful output enforcement", () => {
     expect(JSON.stringify(mocks.defer.mock.calls[0][0])).not.toContain("pinta.guard.target");
   });
 
+  it("denies a native bound preToolUse using its top-level permission dialect", async () => {
+    vi.stubEnv("PINTA_COPILOT_EVENT", "preToolUse");
+    stdin({ sessionId: "s", cwd: "/test", toolName: "view", toolArgs: { path: "fixture.txt" } });
+
+    expect(await runHook()).toBe(0);
+    expect(process.stdout.write).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(vi.mocked(process.stdout.write).mock.calls[0][0]))).toEqual({
+      permissionDecision: "deny", permissionDecisionReason: CANARY,
+    });
+    expect(mocks.evaluate).toHaveBeenCalledOnce();
+    expect(mocks.defer).toHaveBeenCalledOnce();
+    expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
   it.each(["ALLOW", "REVIEW"] as const)("preserves %s without modifying the result", async (decision) => {
     mocks.evaluate.mockResolvedValue({ ...DENY, decision });
     expect(await runHook()).toBe(0);
@@ -144,8 +162,16 @@ describe("successful output enforcement", () => {
     expect(mocks.send).toHaveBeenCalledOnce();
   });
 
-  it.each(["report_intent", "ask_user"])("retains the internal %s exception after tools", async (tool) => {
+  it.each(["report_intent", "ask_user", "AskUserQuestion"])("retains the internal %s exception after tools", async (tool) => {
     stdin({ ...EVENT, tool_name: tool });
+    expect(await runHook()).toBe(0);
+    expect(mocks.evaluate).not.toHaveBeenCalled();
+    expect(process.stdout.write).not.toHaveBeenCalled();
+    expect(mocks.send).toHaveBeenCalledOnce();
+  });
+
+  it.each(["PreToolUse", "PermissionRequest"])("keeps AskUserQuestion internal at %s", async (kind) => {
+    stdin({ ...EVENT, hook_event_name: kind, tool_name: "AskUserQuestion" });
     expect(await runHook()).toBe(0);
     expect(mocks.evaluate).not.toHaveBeenCalled();
     expect(process.stdout.write).not.toHaveBeenCalled();

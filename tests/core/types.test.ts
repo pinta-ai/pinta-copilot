@@ -51,9 +51,12 @@ describe('types — 3-way discriminator + field absorption', () => {
     expect(isGuardEvent('Stop')).toBe(false);
   });
 
-  it('internal tools (report_intent, ask_user) are telemetry-only', () => {
+  it('internal tools and their documented PascalCase alias are telemetry-only', () => {
     expect(isInternalTool('report_intent')).toBe(true);
     expect(isInternalTool('ask_user')).toBe(true);
+    expect(isInternalTool('AskUserQuestion')).toBe(true);
+    expect(isInternalTool('mcp__server__AskUserQuestion')).toBe(false);
+    expect(isInternalTool('askuserquestion')).toBe(false);
     expect(isInternalTool('bash')).toBe(false);
     expect(isInternalTool(undefined)).toBe(false);
   });
@@ -65,6 +68,29 @@ describe('types — 3-way discriminator + field absorption', () => {
     expect(JSON.parse(formatDeny('PermissionRequest', 'r')!)).toEqual({ behavior: 'deny', message: 'r' });
     expect(formatDeny('PostToolUseFailure', 'r')).toBeNull();
     expect(formatDeny('Stop', 'r')).toBeNull();
+  });
+
+  it.each(['hook_event_name', 'hookEventName', 'hookName'])(
+    'emits the native camelCase preToolUse dialect using %s',
+    (key) => {
+      expect(JSON.parse(formatDeny('PreToolUse', 'r', 'cli', { [key]: 'preToolUse' })!)).toEqual({
+        permissionDecision: 'deny', permissionDecisionReason: 'r',
+      });
+    },
+  );
+
+  it('uses the registered native preToolUse binding without guessing from tool fields', () => {
+    process.env.PINTA_COPILOT_EVENT = 'preToolUse';
+    try {
+      expect(JSON.parse(formatDeny('PreToolUse', 'r', 'cli', {
+        sessionId: 's', toolName: 'view', toolArgs: { path: 'fixture.txt' },
+      })!)).toEqual({ permissionDecision: 'deny', permissionDecisionReason: 'r' });
+    } finally {
+      delete process.env.PINTA_COPILOT_EVENT;
+    }
+    expect(JSON.parse(formatDeny('PreToolUse', 'r', 'cli', {
+      hook_event_name: 'PreToolUse', toolName: 'view',
+    })!)).toHaveProperty('hookSpecificOutput.permissionDecision', 'deny');
   });
 
   it.each(['cli', 'cloud'] as const)('replaces denied %s output without leaking the guard reason', (surface) => {

@@ -4,6 +4,26 @@ All notable changes to pinta-copilot are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Emit top-level `permissionDecision` for native camelCase `preToolUse`.
+  Copilot CLI 1.0.88 ignores the previous nested PascalCase envelope and
+  executes the tool despite a guard DENY. Keep the nested `PreToolUse`
+  contract and choose only from the explicit event/binding (PTA-591).
+- Preserve the internal `ask_user` exemption for the documented PascalCase
+  `AskUserQuestion` alias without exempting arbitrary case variants or MCP
+  tool names (PTA-593).
+- Add red-before-green hook and CJS/ESM subprocess regressions for both gaps.
+
+### Compatibility
+
+- Native failed-result protection remains unsupported: Copilot 1.0.88 ignores
+  attempted stop/replacement output from `PostToolUseFailure`. Document this
+  separately from ordinary nonzero shell exits, which use successful
+  `PostToolUse` and its existing replacement gate (PTA-592).
+- Existing REVIEW/disabled/fail-open behavior, successful-output replacement,
+  original-span queueing and no-collector-IO-after-DENY guarantees remain.
+
 ## [0.10.1] - 2026-09-29
 
 ### Fixed
