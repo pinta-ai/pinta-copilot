@@ -2,10 +2,13 @@
 
 All notable changes to pinta-copilot are documented here.
 
-## [Unreleased]
+## [0.10.2] - 2026-09-30
 
 ### Fixed
 
+- Bundle `@pinta-ai/core` `^0.9.2`, which limits attached short-password
+  masking to mysql-family executables instead of ordinary `find -path` and
+  `find -print` arguments (PTA-515). Guard/export ordering is unchanged.
 - Emit top-level `permissionDecision` for native camelCase `preToolUse`.
   Copilot CLI 1.0.88 ignores the previous nested PascalCase envelope and
   executes the tool despite a guard DENY. Keep the nested `PreToolUse`
