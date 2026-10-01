@@ -14,6 +14,24 @@ function get(p: ReturnType<typeof buildOtlpPayload>, key: string) {
 }
 
 describe('buildOtlpPayload — copilot', () => {
+  it.each(['ordinary', 'FAKE0NativeOutputCredential123456'])('attributes only the model-facing native result: %s', (output) => {
+    const secret = 'FAKE0NativeOutputCredential123456';
+    for (const key of ['tool_result', 'toolResult', 'tool_response']) {
+      const p = buildOtlpPayload({
+        traceId: TRACE, surface: key === 'tool_response' ? 'ext' : 'cli',
+        event: {
+          hook_event_name: 'PostToolUse', session_id: 'synthetic', cwd: '/synthetic',
+          tool_name: 'bash', tool_input: { command: 'echo ordinary', header: `Authorization: Bearer ${secret}` },
+          [key]: { text_result_for_llm: null, textResultForLlm: output, display: secret },
+        },
+      });
+      const value = attrs(p).find((a) => a.key === 'pinta.facts')?.value;
+      if (!value || !('stringValue' in value)) throw new Error('Missing producer findings');
+      expect(JSON.parse(value.stringValue).items[0].secrets.origins).toEqual([output === secret ? 'toolOutput' : 'attributes']);
+      expect(JSON.stringify(p)).not.toContain(secret);
+    }
+  });
+
   it('one span per call, span name copilot.<snake>', () => {
     const p = buildOtlpPayload({
       event: { hook_event_name: 'SessionStart', session_id: 's', cwd: '/t' },
