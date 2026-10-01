@@ -166,6 +166,17 @@ const BASH_CONTEXT_KEYS: ReadonlySet<string> = new Set([
 const ATTR_POLICY: AttrPolicy = {
   skipRedactKeys: SKIP_REDACT_KEYS,
   bashContextKeys: BASH_CONTEXT_KEYS,
+  outputForKey: (key, value) => {
+    if (key === "copilot.error" || key === "copilot.error_message") return value;
+    if (!["copilot.tool_response", "copilot.tool_result", "copilot.toolResult"].includes(key)) return undefined;
+    if (value && typeof value === "object") {
+      const snake = "text_result_for_llm" in value ? value.text_result_for_llm : undefined;
+      const camel = "textResultForLlm" in value ? value.textResultForLlm : undefined;
+      const content = snake ?? camel;
+      if (content !== undefined) return content;
+    }
+    return value;
+  },
 };
 
 // Discriminator keys covered by `copilot.hook` — don't re-emit them raw.

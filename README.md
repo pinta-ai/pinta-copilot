@@ -23,6 +23,11 @@ Copilot's **CLI `preToolUse` command errors are fail-closed**: a non-zero exit o
 
 ## Install
 
+Staging builds live on `staging/skax-a`, use the `skax` npm tag, and pin
+Core `0.9.3-skax.0`. Returned-content findings follow each surface's actual
+model-facing result, not completed arguments. Use the isolated stage catalog
+and coordinated Manager build; keep `main` and the production catalog separate.
+
 ```bash
 git clone https://github.com/pinta-ai/pinta-copilot.git
 cd pinta-copilot
