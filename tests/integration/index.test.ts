@@ -5,7 +5,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { DiskRetryQueue, MAX_POST_BYTES, type OtlpPayload } from "@pinta-ai/core";
+import { DiskRetryQueue, GUIDANCE_MASK, GUIDANCE_WITHHOLD, MAX_POST_BYTES, type OtlpPayload } from "@pinta-ai/core";
 
 // Exercises the built dist/index.js end-to-end: stdin → span + guard deny →
 // stdout, always exit 0. Includes the "internal tool = telemetry only" rule.
@@ -16,6 +16,8 @@ let tmpHome: string;
 const ADAPTER = path.resolve("dist/index.js");
 let decision: "DENY" | "ALLOW" | "REVIEW" = "DENY";
 let guardReason = "deny_rule";
+// Extra DENY fields a manager >= 0.1.16 adds for tool-output inspections (PTA-695).
+let guardExtra: Record<string, unknown> = {};
 let guardStatus = 200;
 let collectorStatus = 200;
 const guardPayloads: OtlpPayload[] = [];
@@ -33,7 +35,7 @@ beforeAll(async () => {
         if (req.url === "/guard") {
           guardPayloads.push(JSON.parse(b));
           res.writeHead(guardStatus, { "content-type": "application/json" });
-          res.end(JSON.stringify({ decision, reason: guardReason, userMessage: "Blocked by Pinta" }));
+          res.end(JSON.stringify({ decision, reason: guardReason, userMessage: "Blocked by Pinta", ...guardExtra }));
         } else {
           sentPayloads.push(JSON.parse(b));
           res.writeHead(collectorStatus);
@@ -51,6 +53,7 @@ beforeAll(async () => {
 beforeEach(() => {
   decision = "DENY";
   guardReason = "deny_rule";
+  guardExtra = {};
   guardStatus = 200;
   collectorStatus = 200;
   guardPayloads.length = 0;
@@ -105,6 +108,7 @@ function run(
 }
 
 const CANARY = "NATIVE_UNTRUSTED_OUTPUT_CANARY";
+const SENSITIVE = "ctx7sk-FAKE0000";
 const POST = {
   hook_event_name: "PostToolUse",
   session_id: "output-test",
@@ -211,10 +215,52 @@ describe.each(["index.js", "index.mjs"])("%s output guard integration", (entry) 
       VSCODE_PID: "fixture",
     });
     expect(code).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({
-      continue: false, stopReason: expect.stringContaining("start a new session"),
-    });
+    expect(JSON.parse(stdout)).toEqual({ continue: false, stopReason: "Blocked by Pinta" });
     expect(stdout).not.toContain(CANARY);
+  });
+
+  it("withholds with the policy message and the recovery hint on an older manager", async () => {
+    const { stdout } = await run(JSON.stringify(POST), adapter);
+    expect(JSON.parse(stdout).modifiedResult.textResultForLlm).toBe(`Blocked by Pinta\n\n${GUIDANCE_WITHHOLD()}`);
+  });
+
+  it("masks the detected value when the manager sent redactions (PTA-695)", async () => {
+    guardExtra = {
+      evaluationId: "e1", outputAction: "mask",
+      redactions: [{ category: "CREDENTIAL", match: SENSITIVE }],
+    };
+    const event = { ...POST, tool_result: { result_type: "success", text_result_for_llm: `key ${SENSITIVE}\n${CANARY}` } };
+    const { code, stdout, pluginData } = await run(JSON.stringify(event), adapter);
+    expect(code).toBe(0);
+    expect(stdout.split("\n")).toHaveLength(1);
+    const parsed = JSON.parse(stdout);
+    expect(parsed).toEqual({ modifiedResult: { resultType: "success", textResultForLlm: expect.any(String) } });
+    expect(parsed.modifiedResult.textResultForLlm).toBe(
+      `Blocked by Pinta (evaluation e1)\n\n${GUIDANCE_MASK(1, "e1")}\n\nkey [REDACTED:CREDENTIAL]\n${CANARY}`,
+    );
+    expect(stdout).not.toContain(SENSITIVE);
+    expect(sentPayloads).toHaveLength(0);
+    // The values travel only in the loopback response: the queued span keeps
+    // the original evidence attribute but no `pinta.*`/`redactions` copy of them.
+    const queued = new DiskRetryQueue(pluginData, "pinta-copilot-test").readAll();
+    expect(queued).toHaveLength(1);
+    const span = queued[0].payload.resourceSpans[0].scopeSpans[0].spans[0];
+    expect(span.attributes).toContainEqual({ key: "pinta.guard.target", value: { stringValue: "tool_output" } });
+    expect(span.attributes.some((a) => a.key.includes("redactions"))).toBe(false);
+    expect(JSON.stringify(span.attributes.filter((a) => a.key.startsWith("pinta.")))).not.toContain(SENSITIVE);
+  });
+
+  it("stops VS Code Local with the notice even when the manager asked to mask", async () => {
+    guardExtra = {
+      evaluationId: "e1", outputAction: "mask",
+      redactions: [{ category: "CREDENTIAL", match: SENSITIVE }],
+    };
+    const { tool_result, ...event } = POST;
+    const { stdout } = await run(JSON.stringify({ ...event, tool_response: `key ${SENSITIVE}` }), adapter, {
+      VSCODE_PID: "fixture",
+    });
+    expect(JSON.parse(stdout)).toEqual({ continue: false, stopReason: "Blocked by Pinta (evaluation e1)" });
+    expect(stdout).not.toContain(SENSITIVE);
   });
 
   it.each(["ALLOW", "REVIEW"] as const)("does not replace %s results", async (verdict) => {

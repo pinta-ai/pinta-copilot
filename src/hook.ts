@@ -68,7 +68,9 @@ export async function runHook(): Promise<number> {
     // telemetry block below must not be able to discard an already-decided
     // DENY via the outer catch — that would silently ALLOW a denied tool.
     if (guard?.decision === "DENY") {
-      const out = formatDeny(kind, guard.userMessage ?? guard.reason ?? "guard_deny", surface, event);
+      // The whole result goes in: PostToolUse needs its outputAction/redactions
+      // (PTA-695); the before-tool gates read `userMessage ?? reason` from it.
+      const out = formatDeny(kind, guard, surface, event);
       if (out) process.stdout.write(out + "\n");
     }
 

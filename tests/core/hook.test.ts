@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GuardResult, OtlpPayload } from "@pinta-ai/core";
+import { GUIDANCE_MASK, GUIDANCE_WITHHOLD, type GuardResult, type OtlpPayload } from "@pinta-ai/core";
 import { runHook } from "../../src/hook";
 import type { RawEvent } from "../../src/core/types";
 
@@ -29,6 +29,8 @@ vi.mock("../../src/core/trace", () => ({
 }));
 
 const CANARY = "UNTRUSTED_OUTPUT_CANARY";
+const SENSITIVE = "ctx7sk-FAKE0000";
+const MESSAGE = "Blocked by Pinta AI — deny_prompt_injection_corroborated";
 const EVENT: RawEvent = {
   hook_event_name: "PostToolUse",
   session_id: "s",
@@ -37,11 +39,21 @@ const EVENT: RawEvent = {
   tool_input: { path: "/test/notes.txt" },
   tool_result: { result_type: "success", text_result_for_llm: CANARY },
 };
+// An older manager: policy message, no evaluation id, no output action → withhold.
 const DENY: GuardResult = {
   decision: "DENY",
   reason: "deny_prompt_injection_corroborated",
-  userMessage: CANARY,
+  userMessage: MESSAGE,
   durationMs: 1,
+};
+// Manager >= 0.1.16 asking to mask one detected credential (PTA-695).
+const MASK: GuardResult = {
+  ...DENY,
+  reason: "deny_credential_in_output",
+  userMessage: "Blocked by Pinta AI — deny_credential_in_output",
+  evaluationId: "e1",
+  outputAction: "mask",
+  redactions: [{ category: "CREDENTIAL", match: SENSITIVE }],
 };
 
 function stdin(event: RawEvent) {
@@ -91,10 +103,63 @@ describe("successful output enforcement", () => {
       key: "pinta.guard.decision", value: { stringValue: "deny" },
     });
     expect(process.stdout.write).toHaveBeenCalledOnce();
-    const output = vi.mocked(process.stdout.write).mock.calls[0][0];
+    const output = String(vi.mocked(process.stdout.write).mock.calls[0][0]);
     expect(output).not.toContain(CANARY);
-    expect(JSON.parse(String(output))).toHaveProperty("modifiedResult.resultType", "success");
+    const text: string = JSON.parse(output).modifiedResult.textResultForLlm;
+    expect(JSON.parse(output)).toHaveProperty("modifiedResult.resultType", "success");
+    // Old manager → withhold: the policy message, the recovery hint, no output.
+    expect(text).toBe(`${MESSAGE}\n\n${GUIDANCE_WITHHOLD()}`);
     expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
+  it("delivers a masked output when the manager sent the detected values (PTA-695)", async () => {
+    stdin({ ...EVENT, tool_result: { result_type: "success", text_result_for_llm: `key ${SENSITIVE} ${CANARY}` } });
+    mocks.evaluate.mockResolvedValue(MASK);
+
+    expect(await runHook()).toBe(0);
+    expect(process.stdout.write).toHaveBeenCalledOnce();
+    const output = String(vi.mocked(process.stdout.write).mock.calls[0][0]);
+    const parsed = JSON.parse(output);
+    expect(parsed).toEqual({ modifiedResult: { resultType: "success", textResultForLlm: expect.any(String) } });
+    const text: string = parsed.modifiedResult.textResultForLlm;
+    expect(text).toBe(
+      `${MASK.userMessage} (evaluation e1)\n\n${GUIDANCE_MASK(1, "e1")}\n\nkey [REDACTED:CREDENTIAL] ${CANARY}`,
+    );
+    expect(output).not.toContain(SENSITIVE);
+    expect(parsed).not.toHaveProperty("continue");
+
+    // Enforcement before telemetry, and the DENY is deferred, never sent live.
+    const order = vi.mocked(process.stdout.write).mock.invocationCallOrder[0];
+    expect(mocks.defer.mock.invocationCallOrder[0]).toBeGreaterThan(order);
+    expect(mocks.defer).toHaveBeenCalledOnce();
+    expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+
+    // The span keeps the original evidence and the verdict, but the detected
+    // values arrive only in the loopback response: no `pinta.guard.*` attribute
+    // and no `redactions` key may carry them.
+    const span = mocks.defer.mock.calls[0][0].resourceSpans[0].scopeSpans[0].spans[0];
+    expect(span.attributes).toContainEqual({ key: "pinta.guard.target", value: { stringValue: "tool_output" } });
+    expect(span.attributes).toContainEqual({ key: "pinta.guard.decision", value: { stringValue: "deny" } });
+    const guardAttrs = span.attributes.filter((a) => a.key.startsWith("pinta."));
+    expect(JSON.stringify(guardAttrs)).not.toContain(SENSITIVE);
+    expect(JSON.stringify(guardAttrs)).not.toContain("redactions");
+    expect(span.attributes.some((a) => a.key.includes("redactions"))).toBe(false);
+  });
+
+  it("stops VS Code Local with the notice as stopReason — no replacement channel", async () => {
+    const { tool_result, ...rest } = EVENT;
+    stdin({ ...rest, tool_response: `key ${SENSITIVE} ${CANARY}` });
+    mocks.evaluate.mockResolvedValue(MASK);
+
+    expect(await runHook()).toBe(0);
+    expect(process.stdout.write).toHaveBeenCalledOnce();
+    const output = String(vi.mocked(process.stdout.write).mock.calls[0][0]);
+    expect(JSON.parse(output)).toEqual({ continue: false, stopReason: `${MASK.userMessage} (evaluation e1)` });
+    expect(output).not.toContain(SENSITIVE);
+    expect(output).not.toContain(CANARY);
+    expect(mocks.defer).toHaveBeenCalledOnce();
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
@@ -128,7 +193,7 @@ describe("successful output enforcement", () => {
     expect(await runHook()).toBe(0);
     expect(process.stdout.write).toHaveBeenCalledOnce();
     expect(JSON.parse(String(vi.mocked(process.stdout.write).mock.calls[0][0]))).toEqual({
-      permissionDecision: "deny", permissionDecisionReason: CANARY,
+      permissionDecision: "deny", permissionDecisionReason: MESSAGE,
     });
     expect(mocks.evaluate).toHaveBeenCalledOnce();
     expect(mocks.defer).toHaveBeenCalledOnce();

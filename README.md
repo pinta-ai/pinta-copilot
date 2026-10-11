@@ -6,8 +6,8 @@ A **single adapter + a single hook file** covers two surfaces:
 
 | Surface | Hook source | Guard | Notes |
 |---|---|---|---|
-| **Copilot CLI / SDK** | `~/.copilot/hooks/pinta-copilot.json` | `preToolUse`, `permissionRequest`, `postToolUse` | Denied successful output is replaced before the model receives it |
-| **VS Code Local harness** (in-editor Copilot Chat) | same `~/.copilot/hooks/` file | `PreToolUse`, `PostToolUse` | Denied successful output stops the current run |
+| **Copilot CLI / SDK** | `~/.copilot/hooks/pinta-copilot.json` | `preToolUse`, `permissionRequest`, `postToolUse` | Denied successful output is replaced before the model receives it: the policy message, a recovery hint, and the output with the detected values masked (or withheld) |
+| **VS Code Local harness** (in-editor Copilot Chat) | same `~/.copilot/hooks/` file | `PreToolUse`, `PostToolUse` | Denied successful output stops the current run with the policy message (no result-replacement channel) |
 
 > Automatic cloud hook installation (`.github/hooks/`) remains out of scope.
 > When registered there, the output response uses the Copilot CLI/SDK contract.
@@ -83,17 +83,39 @@ persistence failures are reported without discarding the enforcement response.
 Before-tool hooks cannot inspect contents that the tool has not returned yet.
 `PostToolUse` now sends the original redaction-aware OTLP payload to the same
 guard. On `DENY`, the adapter emits the host's supported response and defers
-network telemetry as described above:
+network telemetry as described above. What the model receives is built by
+`@pinta-ai/core`'s `buildOutputDenial` from the manager's answer (PTA-695):
+
+- **notice** — the policy's own `userMessage` (or a default) plus
+  ` (evaluation <id>)` when the manager sent an `evaluationId`, so a false
+  positive can be reported by reference.
+- **guidance** — a fixed recovery hint: for a mask, continue with the masked
+  text and ask the user for any value that is required; for a withhold, do not
+  retry to bypass the block and tell the user what was withheld.
+- **output** — only when the manager answered `outputAction: "mask"` with
+  `redactions`, the original output with each detected value replaced by
+  `[REDACTED:<category>]` (inside JSON strings the escaped form is masked too).
+  Any other answer — `outputAction: "withhold"`, a value that is not in the
+  output, or an older manager that sends neither field — withholds the output.
+
+Per surface:
 
 - **Copilot CLI/SDK/cloud:** `modifiedResult` with `resultType: "success"` and
-  a fixed, safe `textResultForLlm` replaces the denied result.
-- **VS Code Local:** `continue: false` with a fixed `stopReason` stops the run.
+  `textResultForLlm` = `notice + "\n\n" + guidance` (+ `"\n\n" + masked output`
+  for a mask) replaces the denied result. The session continues.
+- **VS Code Local:** `continue: false` with `stopReason` = `notice` stops the
+  run. The Local `PostToolUse` contract has no result-replacement channel
+  (only `decision: "block"`, `additionalContext`, `continue`/`stopReason`,
+  `systemMessage`), so masked output cannot be delivered there; this is a
+  documented limitation, not a policy choice.
 
 The native `tool_result`/`toolResult` shape takes precedence over inherited
 editor environment variables; Copilot SDK sessions inside VS Code must not
 receive a Local-only stop response. Local `tool_response` uses the stop
 contract. Both snake_case and camelCase input forms are supported; response
-keys use the documented casing.
+keys use the documented casing. The original text is read from
+`tool_result.text_result_for_llm` / `toolResult.textResultForLlm` (CLI/SDK)
+or `tool_response` (Local); a non-string result is JSON-stringified first.
 
 Keep the generated hook registration's per-command
 `env: { "PINTA_COPILOT_EVENT": "PostToolUse" }` binding. Some native Copilot
@@ -103,13 +125,17 @@ matching name for each hook, **not one global value for all events**. Without
 either a discriminator or that binding, the event remains unknown and cannot
 be guarded. Tool-result contents are not used to guess the firing event.
 
-No untrusted output or guard-supplied reason is echoed into either response.
-The original masked/truncated input and output remain on the same telemetry
-span and `spanId`, together with the verdict and
-`pinta.guard.target = "tool_output"`. The tool **already ran**: withholding a
-result or stopping a run does not undo its effects. For the Local stop path,
-the result may remain in the transcript; start a new session, not a resumed
-tainted conversation.
+The untrusted output reaches the model only masked, or not at all. The manager
+message that is echoed is the policy's own text: it is built from rule names
+and detector reasons, never from values found in the input, and for output
+inspections (manager >= 0.1.16) it does not quote the tool output either. The
+detected values themselves travel only in the synchronous loopback guard
+response — they are never written to the span, the retry queue, or a log. The
+original masked/truncated input and output remain on the same telemetry span
+and `spanId`, together with the verdict and
+`pinta.guard.target = "tool_output"`. The tool **already ran**: masking or
+withholding a result, or stopping a run, does not undo its effects. For the
+Local stop path, the result may remain in the transcript.
 
 `ALLOW`, `REVIEW`, inactive guarding and existing fail-open behavior are
 unchanged. Internal control tools `report_intent`, `ask_user` and its documented
