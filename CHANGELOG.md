@@ -2,6 +2,45 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.11.0] - 2026-10-11
+
+### Changed
+
+- A denied successful tool output no longer ends in a fixed "withheld" line
+  (PTA-695). The CLI/SDK/cloud `modifiedResult.textResultForLlm` now carries
+  the policy's own `userMessage` plus the manager's evaluation id, a fixed
+  recovery hint, and — when the manager answered `outputAction: "mask"` with
+  `redactions` — the original output with each detected value replaced by
+  `[REDACTED:<category>]`. The session continues with the masked text instead
+  of losing the whole result. All of this is built by `@pinta-ai/core`
+  `buildOutputDenial`, so the copy matches the other adaptors.
+- `outputAction: "withhold"`, a mask whose values are not in the output, and a
+  manager that sends neither field all withhold: notice plus the withhold hint,
+  none of the output.
+- VS Code Local still answers `continue: false`; its `stopReason` is now the
+  notice (policy message + evaluation id) instead of a fixed sentence. The
+  Local `PostToolUse` contract has no result-replacement channel, so masked
+  output cannot be delivered there — documented limitation.
+- `formatDeny` takes the guard result (`GuardDeny`) and reads
+  `userMessage ?? reason` itself; the bare-string form still works for the
+  before-tool gates. New `returnedText` reads the original text from
+  `tool_result.text_result_for_llm` / `toolResult.textResultForLlm` /
+  `tool_response`, stringifying a non-string result.
+- Bundle `@pinta-ai/core` `^0.10.0` (`GuardResult.evaluationId` /
+  `outputAction` / `redactions`, `buildOutputDenial`).
+
+### Compatibility
+
+- Manager < 0.1.16 sends no `outputAction`/`redactions`: every output DENY
+  withholds, with the manager's `userMessage` as the notice (no evaluation id).
+- The detected values arrive only in the synchronous loopback guard response;
+  `attachGuard` does not copy them, so the queued span, the retry queue and
+  stderr never carry them. The original redacted evidence stays on the span as
+  before, with `pinta.guard.target = "tool_output"`.
+- Before-tool/permission gating, internal tools, `PostToolUseFailure`
+  (telemetry-only), ALLOW/REVIEW, fail-open, denial-before-telemetry ordering
+  and the deferred-span queue are unchanged.
+
 ## [0.10.2] - 2026-09-30
 
 ### Fixed

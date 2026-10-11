@@ -21,6 +21,7 @@
 // so we do NOT enumerate every field. We only normalize the handful used for
 // routing / guard / trace, absorbing both casings + both discriminator keys.
 
+import { buildOutputDenial, type GuardResult } from "@pinta-ai/core";
 import type { Surface } from "./surface.js";
 
 export interface RawEvent {
@@ -140,26 +141,66 @@ export function isInternalTool(name: string | undefined): boolean {
   return name !== undefined && INTERNAL_TOOLS.has(name);
 }
 
-const WITHHELD_OUTPUT =
-  "Pinta AI withheld this tool output because it matched a blocking policy. " +
-  "The tool already ran. Do not retry this operation to bypass the block.";
-const STOP_REASON =
-  "Pinta AI stopped this run because a tool output matched a blocking policy. " +
-  "The tool already ran and its original output may remain in the transcript. " +
-  "Review the incident and start a new session instead of resuming this one.";
+/**
+ * The part of a guard DENY that `formatDeny` reads. `reason`/`userMessage` feed
+ * the before-tool gates; the optional fields are what a manager >= 0.1.16 adds
+ * to a tool-output DENY (PTA-695) and what `buildOutputDenial` turns into the
+ * replacement text. An older manager sends none of them, which withholds.
+ */
+export type GuardDeny = Pick<GuardResult, "reason" | "userMessage"> &
+  Partial<Pick<GuardResult, "evaluationId" | "outputAction" | "redactions">>;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The returned text as the host would have handed it to the model. CLI/SDK
+ * carry it under `tool_result.text_result_for_llm` (or the camelCase pair);
+ * VS Code Local under `tool_response`. Anything that is not a string is
+ * JSON-stringified so a value nested in a structured result is still found
+ * (and masked in its escaped form) rather than missed.
+ */
+export function returnedText(event: RawEvent | undefined): string {
+  if (!event) return "";
+  const native = event.tool_result ?? event.toolResult;
+  const structured = isRecord(native) ? native : undefined;
+  const candidate =
+    structured?.text_result_for_llm ?? structured?.textResultForLlm ?? native ?? event.tool_response;
+  if (candidate === undefined || candidate === null) return "";
+  if (typeof candidate === "string") return candidate;
+  try {
+    return JSON.stringify(candidate) ?? "";
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Render the deny decision in the format the firing event expects, or null if
  * the event isn't a gating event. preToolUse uses `permissionDecision`; the CLI
- * permission service uses `behavior`/`message`. After-tool responses never echo
- * a guard reason: it may contain text derived from the untrusted tool output.
+ * permission service uses `behavior`/`message`.
+ *
+ * `deny` is the guard result (preferred — the after-tool branch needs its
+ * `outputAction`/`redactions`) or, for the before-tool gates, the bare reason
+ * string the older signature took; a string stands in as the manager message.
+ *
+ * After-tool responses carry the manager's `userMessage` plus the evaluation
+ * id (PTA-695). That message is the policy's own text — the manager builds it
+ * from rule names and detector reasons, never from values found in the input,
+ * and for output inspections it does not quote the tool output either — so
+ * echoing it cannot hand the model what was denied. The tool output itself
+ * reaches the model only through `buildOutputDenial`: with every detected
+ * value masked, or not at all.
  */
 export function formatDeny(
   kind: EventKind,
-  reason: string,
+  deny: string | GuardDeny,
   surface: Surface = "cli",
   event?: RawEvent,
 ): string | null {
+  const guard: GuardDeny = typeof deny === "string" ? { reason: deny, userMessage: deny } : deny;
+  const reason = guard.userMessage ?? guard.reason ?? "guard_deny";
   if (kind === "PreToolUse") {
     const decision = { permissionDecision: "deny", permissionDecisionReason: reason };
     // Native camelCase hooks ignore the PascalCase hookSpecificOutput envelope.
@@ -177,14 +218,23 @@ export function formatDeny(
     return JSON.stringify({ behavior: "deny", message: reason });
   }
   if (kind === "PostToolUse") {
+    const denial = buildOutputDenial({ original: returnedText(event), guard });
     // Copilot's SDK can run inside VS Code; editor env alone is not its protocol.
     const copilotResult = event !== undefined && ("tool_result" in event || "toolResult" in event);
     const localResult = event !== undefined && "tool_response" in event;
-    return !copilotResult && (localResult || surface === "ext")
-      ? JSON.stringify({ continue: false, stopReason: STOP_REASON })
-      : JSON.stringify({
-          modifiedResult: { resultType: "success", textResultForLlm: WITHHELD_OUTPUT },
-        });
+    if (!copilotResult && (localResult || surface === "ext")) {
+      // VS Code Local PostToolUse has no result-replacement channel (only
+      // block/stop/additionalContext), so the run still stops. The reason is
+      // the manager's message, never the masked output — documented limitation.
+      return JSON.stringify({ continue: false, stopReason: denial.notice });
+    }
+    // CLI/SDK/cloud: `modifiedResult` replaces the result the model sees. A mask
+    // carries the masked output below the notice + guidance; a withhold does not.
+    const text =
+      denial.action === "mask"
+        ? `${denial.notice}\n\n${denial.guidance}\n\n${denial.text}`
+        : `${denial.notice}\n\n${denial.guidance}`;
+    return JSON.stringify({ modifiedResult: { resultType: "success", textResultForLlm: text } });
   }
   return null;
 }
