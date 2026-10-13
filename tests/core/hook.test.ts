@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GUIDANCE_MASK, GUIDANCE_WITHHOLD, type GuardResult, type OtlpPayload } from "@pinta-ai/core";
 import { runHook } from "../../src/hook";
 import type { RawEvent } from "../../src/core/types";
+import { CallManager } from "../../src/core/calls";
 
 const mocks = vi.hoisted(() => ({
   evaluate: vi.fn<(payload: OtlpPayload, endpoint?: string) => Promise<GuardResult | null>>(),
@@ -241,5 +242,19 @@ describe("successful output enforcement", () => {
     expect(mocks.evaluate).not.toHaveBeenCalled();
     expect(process.stdout.write).not.toHaveBeenCalled();
     expect(mocks.send).toHaveBeenCalledOnce();
+  });
+  it("still denies when call correlation blows up", async () => {
+    // Correlation runs before the guard is asked, because the span it names is
+    // the span the guard judges. So a throw there would escape through
+    // runHook's catch and carry an undecided DENY out with it — the tool would
+    // run. Naming a call is never worth that.
+    vi.spyOn(CallManager.prototype, "close").mockImplementation(() => {
+      throw new Error("plugin data unavailable");
+    });
+    stdin(EVENT);
+    mocks.evaluate.mockResolvedValue(DENY);
+    expect(await runHook()).toBe(0);
+    expect(process.stdout.write).toHaveBeenCalledOnce();
+    expect(String(vi.mocked(process.stdout.write).mock.calls[0][0])).toContain(MESSAGE);
   });
 });
