@@ -218,12 +218,30 @@ export function buildOtlpPayload(args: {
   traceId: string; // ULID (26 chars)
   surface: Surface;
   now?: number; // ms since epoch; injectable for tests
+  /**
+   * The id tying this call's start to its end, when the adaptor had to supply
+   * one. Emitted under `pinta.call_id` rather than `copilot.tool_use_id`
+   * because the host did not issue it — see the note on the attribute below.
+   */
+  callId?: string | null;
 }): OtlpPayload {
   const now = args.now ?? Date.now();
   return buildPayload({
     traceId: args.traceId,
     spanName: `copilot.${snakeCase(eventName(args.event) ?? "unknown")}`,
-    attributes: flattenEvent(args.event, args.surface, now),
+    attributes: [
+      ...flattenEvent(args.event, args.surface, now),
+      // Kept out of the `copilot.` namespace on purpose. Everything under that
+      // prefix is Bronze-flattened from the host's own payload, so a reader is
+      // entitled to treat it as what Copilot said. This id is ours: the CLI
+      // issues no `tool_use_id`, so the adaptor pairs the two hooks itself.
+      // Writing it as `copilot.tool_use_id` would pass our inference off as the
+      // host's fact, and would also quietly overwrite the real one on the
+      // extension surface, which does send it.
+      ...(args.callId
+        ? [{ key: "pinta.call_id", value: { stringValue: args.callId } } as OtlpAttribute]
+        : []),
+    ],
     resource: resourceAttrs(args.event),
     scope: { name: "pinta-copilot", version: SDK_VERSION },
     now,

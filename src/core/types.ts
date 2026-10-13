@@ -81,6 +81,18 @@ export function toolInput(e: RawEvent): unknown {
   return e.tool_input ?? e.toolArgs ?? e.toolInput;
 }
 
+/**
+ * The call id the host issued, if it issued one.
+ *
+ * The VS Code extension does (Claude-Code-shaped `tool_use_id`, present on both
+ * PreToolUse and PostToolUse). The CLI does not — see the surface notes at the
+ * top of this file. Absence is what tells the adaptor it has to supply one
+ * itself; it is never filled in with a placeholder.
+ */
+export function hostCallId(e: RawEvent): string | undefined {
+  return str(e.tool_use_id) ?? str(e.toolUseId);
+}
+
 // --- Event classification (normalized, case-insensitive) ---
 
 export type EventKind =
@@ -126,6 +138,20 @@ export function classify(e: RawEvent): EventKind {
 /** Successful results must be judged after the tool, when their contents exist. */
 export function isGuardEvent(kind: EventKind): boolean {
   return kind === "PreToolUse" || kind === "PermissionRequest" || kind === "PostToolUse";
+}
+
+/**
+ * Events that close a tool call. A failure ends the call just as a success
+ * does — the tool ran and came back — so it has to claim the pending start too,
+ * or a run that failed would leave its start open and look like a call that
+ * never returned.
+ *
+ * PermissionRequest is deliberately not here: it gates a call rather than
+ * beginning or ending one, and pairing it with an end would invent a call that
+ * was never made.
+ */
+export function isCallEnd(kind: EventKind): boolean {
+  return kind === "PostToolUse" || kind === "PostToolUseFailure";
 }
 
 /**

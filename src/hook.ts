@@ -9,22 +9,61 @@
  * crashing hook bricks the whole agent; every path here is wrapped and
  * falls through to `process.stderr` + exit 0 on error).
  */
-import { loadConfig } from "./core/config.js";
+import { loadConfig, type PintaConfig } from "./core/config.js";
 import { detectSurface } from "./core/surface.js";
 import { attachGuard } from "@pinta-ai/core";
 import {
+  type EventKind,
   type RawEvent,
   classify,
+  hostCallId,
+  isCallEnd,
   isGuardEvent,
   isInternalTool,
   formatDeny,
   sessionId as getSessionId,
+  toolInput as getToolInput,
   toolName as getToolName,
 } from "./core/types.js";
 import { deferPayload, Transport } from "./core/transport.js";
 import { TraceManager } from "./core/trace.js";
+import { CallManager } from "./core/calls.js";
 import { buildOtlpPayload } from "./core/otlp.js";
 import { evaluateGuard } from "./core/guard.js";
+
+/**
+ * The id tying a call's start to its end.
+ *
+ * The extension sends `tool_use_id` on both halves, so there is nothing to do;
+ * returning null leaves that id to speak for itself. The CLI sends no such
+ * field, so PreToolUse mints one and the matching end claims it back. Any other
+ * event is not half of a call and gets none.
+ *
+ * Never throws. This runs before the guard is asked, because the span it names
+ * is the span the guard judges — so a throw here would travel out through
+ * `runHook`'s catch and take an undecided DENY with it, turning a blocked tool
+ * into an allowed one. A name for a call is worth nothing next to that, so
+ * every failure is answered with "no id".
+ */
+function correlateCall(
+  config: PintaConfig,
+  kind: EventKind,
+  event: RawEvent,
+  sid: string | undefined,
+): string | null {
+  try {
+    if (hostCallId(event)) return null;
+    if (kind !== "PreToolUse" && !isCallEnd(kind)) return null;
+    const calls = new CallManager(config);
+    const toolNm = getToolName(event);
+    const ti = getToolInput(event);
+    return kind === "PreToolUse"
+      ? calls.open(sid, toolNm, ti)
+      : calls.close(sid, toolNm, ti);
+  } catch {
+    return null;
+  }
+}
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -53,7 +92,11 @@ export async function runHook(): Promise<number> {
     // Until then the guard got a hand-picked summary beside the span, and the
     // summary drifted — `cwd` (PTA-176) and the event name (PTA-207) were on
     // the span and not in the summary.
-    const payload = buildOtlpPayload({ event, traceId, surface });
+    //
+    // The CLI issues no tool_use_id, so a call's start and end would reach the
+    // backend as two unrelated records. Pair them here and carry one id.
+    const callId = correlateCall(config, kind, event, sid);
+    const payload = buildOtlpPayload({ event, traceId, surface, callId });
 
     // Before-tool gates cannot inspect a result that does not exist yet.
     // PostToolUse judges the original result before the host continues.

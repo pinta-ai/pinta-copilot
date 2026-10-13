@@ -13,6 +13,7 @@ import { DiskRetryQueue, GUIDANCE_MASK, GUIDANCE_WITHHOLD, MAX_POST_BYTES, type 
 let server: http.Server;
 let port = 0;
 let tmpHome: string;
+/** Every OTLP payload the adapter posted, newest last. */
 const ADAPTER = path.resolve("dist/index.js");
 let decision: "DENY" | "ALLOW" | "REVIEW" = "DENY";
 let guardReason = "deny_rule";
@@ -389,5 +390,79 @@ describe("index.js integration", () => {
     const { code, stdout } = await run("NOT JSON {{{");
     expect(code).toBe(0);
     expect(stdout).toBe("");
+  });
+
+  /** Every attribute on the single span of the most recent payload. */
+  /**
+   * One plugin-data dir for a whole pairing. `run` makes a fresh one per call
+   * by default, and the pending-call file lives there — the real adaptor
+   * always has the same dir across a session, so sharing it is what the host
+   * actually does, not a concession to the test.
+   */
+  function sharedData(): { COPILOT_PLUGIN_DATA: string } {
+    return { COPILOT_PLUGIN_DATA: fs.mkdtempSync(path.join(tmpHome, "pair-")) };
+  }
+
+  function lastAttrs(): Record<string, string> {
+    const span = sentPayloads.at(-1)!.resourceSpans[0].scopeSpans[0].spans[0];
+    return Object.fromEntries(
+      span.attributes.map((a: any) => [a.key, a.value?.stringValue]),
+    );
+  }
+
+  it("names a CLI call so its start and its end can be told apart from another's", async () => {
+    // ALLOW: a denied call is deferred, never sent, so there would be no
+    // collector payload to read the id off.
+    decision = "ALLOW";
+    // The CLI sends no tool_use_id and a fresh span id per hook, so without
+    // this the two halves of one call arrive as two unrelated records.
+    const data = sharedData();
+    await run(JSON.stringify({ hook_event_name: "PreToolUse", session_id: "pair", cwd: "/t", tool_name: "bash", tool_input: { command: "npm run build" } }), ADAPTER, data);
+    const pre = lastAttrs();
+    await run(JSON.stringify({ hook_event_name: "PostToolUse", session_id: "pair", cwd: "/t", tool_name: "bash", tool_input: { command: "npm run build" }, tool_result: { result_type: "success" } }), ADAPTER, data);
+    const post = lastAttrs();
+
+    expect(pre["pinta.call_id"]).toMatch(/^[0-9a-f]{16}$/);
+    expect(post["pinta.call_id"]).toBe(pre["pinta.call_id"]);
+    // Ours, not the host's. `copilot.*` is flattened from what Copilot sent, so
+    // writing it there would pass our inference off as the host's fact.
+    expect(pre["copilot.tool_use_id"]).toBeUndefined();
+
+    // A different call in the same session gets a different id.
+    await run(JSON.stringify({ hook_event_name: "PreToolUse", session_id: "pair", cwd: "/t", tool_name: "bash", tool_input: { command: "git status" } }), ADAPTER, data);
+    expect(lastAttrs()["pinta.call_id"]).not.toBe(pre["pinta.call_id"]);
+  });
+
+  it("leaves the extension's own call id alone", async () => {
+    // ALLOW: a denied call is deferred, never sent, so there would be no
+    // collector payload to read the id off.
+    decision = "ALLOW";
+    // The extension surface already sends tool_use_id on both halves. Minting
+    // a second id there would create two answers to the same question.
+    await run(JSON.stringify({ hook_event_name: "PreToolUse", session_id: "ext1", cwd: "/t", tool_name: "read_file", tool_input: { filePath: "/a" }, tool_use_id: "call_1__vscode-1", transcript_path: "/vs/x.jsonl" }));
+    const attrs = lastAttrs();
+    expect(attrs["copilot.tool_use_id"]).toBe("call_1__vscode-1");
+    expect(attrs["pinta.call_id"]).toBeUndefined();
+  });
+
+  it("gives an end nothing to claim when its start was never seen", async () => {
+    // ALLOW: a denied call is deferred, never sent, so there would be no
+    // collector payload to read the id off.
+    decision = "ALLOW";
+    // Installed mid-run, or the start was lost. Absence is the honest answer;
+    // the two halves stay separate, exactly as they were before.
+    await run(JSON.stringify({ hook_event_name: "PostToolUse", session_id: "orphan", cwd: "/t", tool_name: "bash", tool_input: { command: "ls" }, tool_result: { result_type: "success" } }));
+    expect(lastAttrs()["pinta.call_id"]).toBeUndefined();
+  });
+
+  it("lets a failure close the call its start opened", async () => {
+    // ALLOW: a denied call is deferred, never sent, so there would be no
+    // collector payload to read the id off.
+    decision = "ALLOW";
+    const data = sharedData();
+    await run(JSON.stringify({ hook_event_name: "PreToolUse", session_id: "fail", cwd: "/t", tool_name: "view", tool_input: { path: "/big" } }), ADAPTER, data);
+    const pre = lastAttrs();
+    await run(JSON.stringify({ hook_event_name: "PostToolUseFailure", session_id: "fail", cwd: "/t", tool_name: "view", tool_input: { path: "/big" }, error: "File too large" }), ADAPTER, data);
+    expect(lastAttrs()["pinta.call_id"]).toBe(pre["pinta.call_id"]);
   });
 });
