@@ -220,13 +220,43 @@ describe("successful output enforcement", () => {
     expect(JSON.stringify(mocks.send.mock.calls[0][0])).not.toContain("pinta.guard.target");
   });
 
-  it.each(["PostToolUseFailure", "UserPromptSubmit", "Stop"])("does not change %s behavior", async (kind) => {
+  it.each(["UserPromptSubmit", "Stop"])("does not change %s behavior", async (kind) => {
     stdin({ ...EVENT, hook_event_name: kind });
     expect(await runHook()).toBe(0);
     expect(mocks.evaluate).not.toHaveBeenCalled();
     expect(process.stdout.write).not.toHaveBeenCalled();
     expect(mocks.send).toHaveBeenCalledOnce();
   });
+
+  // PTA-592: a failed tool call is now judged for telemetry (the backend's
+  // post-hoc audit already re-evaluates it as tool.call.failed regardless of
+  // what the live adapter did, so a live MISSING verdict was a visibility
+  // gap). Native testing confirmed the host ignores both continue/stopReason
+  // and modifiedResult for this event kind, so DENY is recorded but no
+  // enforcement response is ever written to stdout.
+  it("judges PostToolUseFailure for telemetry but attempts no result block/replace (PTA-592)", async () => {
+    stdin({ ...EVENT, hook_event_name: "PostToolUseFailure" });
+    expect(await runHook()).toBe(0);
+    expect(mocks.evaluate).toHaveBeenCalledOnce();
+    expect(process.stdout.write).not.toHaveBeenCalled();
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.defer).toHaveBeenCalledOnce();
+    const span = mocks.defer.mock.calls[0][0].resourceSpans[0].scopeSpans[0].spans[0];
+    expect(span.attributes).toContainEqual({ key: "pinta.guard.decision", value: { stringValue: "deny" } });
+    expect(span.attributes).toContainEqual({ key: "pinta.guard.target", value: { stringValue: "tool_output" } });
+  });
+
+  it.each(["ALLOW", "REVIEW"] as const)(
+    "records %s on PostToolUseFailure without blocking (PTA-592)",
+    async (decision) => {
+      stdin({ ...EVENT, hook_event_name: "PostToolUseFailure" });
+      mocks.evaluate.mockResolvedValue({ ...DENY, decision });
+      expect(await runHook()).toBe(0);
+      expect(process.stdout.write).not.toHaveBeenCalled();
+      expect(mocks.send).toHaveBeenCalledOnce();
+      expect(mocks.defer).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["report_intent", "ask_user", "AskUserQuestion"])("retains the internal %s exception after tools", async (tool) => {
     stdin({ ...EVENT, tool_name: tool });

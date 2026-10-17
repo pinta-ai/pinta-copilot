@@ -142,11 +142,15 @@ unchanged. Internal control tools `report_intent`, `ask_user` and its documented
 PascalCase alias `AskUserQuestion` remain telemetry-only. Arbitrary case variants
 or similarly named MCP tools are not exempt.
 
-**Native failed-result enforcement is unsupported.** `PostToolUseFailure`
-remains telemetry-only, not a protected phase. In native Copilot CLI 1.0.88,
-the failure hook fires for a failed `view`, but both `continue: false` and
-`modifiedResult` are ignored and the original error reaches the next model
-request. The hook's `error` may also be less complete than the model-facing
+**Native failed-result enforcement is unsupported, but the verdict is now
+visible (PTA-592).** `PostToolUseFailure` is evaluated like `PostToolUse` —
+the decision and `pinta.guard.target = "tool_output"` are attached to the
+span, closing the live MISSING-verdict gap against the backend's own
+post-hoc audit of failed calls. It is still not a protected phase: in native
+Copilot CLI 1.0.88, the failure hook fires for a failed `view`, but both
+`continue: false` and `modifiedResult` are ignored and the original error
+reaches the next model request, so no denial is printed to stdout for this
+event. The hook's `error` may also be less complete than the model-facing
 result. A future supported host failure-result/batch contract is required;
 printing a denial alone would falsely claim protection.
 
@@ -174,7 +178,7 @@ camelCase result fields or confuse output denial with a prevented tool call.
 | `copilot.model` | Exact host-reported model ID, when attributable; never a placeholder |
 | `copilot.model_source` | Evidence for the model value (see below) |
 | `copilot.<key>` | Every other top-level field (Bronze flattening, raw key preserved) |
-| `pinta.guard.target` | `tool_output` for a non-null successful after-tool verdict; absent on before-tool gates |
+| `pinta.guard.target` | `tool_output` for a non-null after-tool verdict, successful or failed; absent on before-tool gates |
 | `service.name` | `"copilot"` · `telemetry.sdk.name` `"pinta-copilot"` |
 
 ### CLI ↔ ext payload differences (absorbed by the adapter)

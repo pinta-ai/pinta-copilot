@@ -120,7 +120,10 @@ export async function runHook(): Promise<number> {
     // Best-effort, strictly after the enforcement decision has been emitted.
     // The verdict rides on the span the guard judged — same spanId.
     attachGuard(payload, guard);
-    if (guard && kind === "PostToolUse") {
+    // PostToolUseFailure also judges the tool's (error) output, same as
+    // PostToolUse — the backend's output-scope handling (PTA-597) keys off
+    // this attribute to tell an output-class decision from an input-class one.
+    if (guard && (kind === "PostToolUse" || kind === "PostToolUseFailure")) {
       for (const resource of payload.resourceSpans) {
         for (const scope of resource.scopeSpans) {
           for (const span of scope.spans) {
