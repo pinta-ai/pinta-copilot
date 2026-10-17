@@ -135,9 +135,26 @@ export function classify(e: RawEvent): EventKind {
   return KIND_MAP[n.toLowerCase()] ?? "Unknown";
 }
 
-/** Successful results must be judged after the tool, when their contents exist. */
+/**
+ * Successful results must be judged after the tool, when their contents
+ * exist. Failed results (PostToolUseFailure) are judged too: the backend's
+ * own post-hoc re-evaluation already inspects these as `tool.call.failed`
+ * regardless of what the live adapter did, so skipping the live call here
+ * left a visibility gap — the span carried no verdict at all (MISSING) while
+ * the backend's independent audit could still flag the same event (PTA-592).
+ *
+ * This only restores the verdict for telemetry. `formatDeny` still returns
+ * null for PostToolUseFailure: PTA-592 confirmed natively that the host
+ * ignores both `continue`/`stopReason` and `modifiedResult` for this event
+ * kind, so there is no enforcement response to send — only the decision.
+ */
 export function isGuardEvent(kind: EventKind): boolean {
-  return kind === "PreToolUse" || kind === "PermissionRequest" || kind === "PostToolUse";
+  return (
+    kind === "PreToolUse" ||
+    kind === "PermissionRequest" ||
+    kind === "PostToolUse" ||
+    kind === "PostToolUseFailure"
+  );
 }
 
 /**
@@ -262,5 +279,11 @@ export function formatDeny(
         : `${denial.notice}\n\n${denial.guidance}`;
     return JSON.stringify({ modifiedResult: { resultType: "success", textResultForLlm: text } });
   }
+  // PostToolUseFailure deliberately has no branch here. `isGuardEvent` now
+  // asks the guard about it (PTA-592) so the decision reaches telemetry, but
+  // native testing confirmed the host ignores both `continue`/`stopReason`
+  // and `modifiedResult` for this event kind — emitting either would be a
+  // fake-compliance signal that claims a block/replace that never happens.
+  // Revisit only once Copilot exposes a real failure-result contract.
   return null;
 }

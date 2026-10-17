@@ -47,11 +47,11 @@ describe('types — 3-way discriminator + field absorption', () => {
     }
   });
 
-  it('guard fires before tools and on successful tool results', () => {
+  it('guard fires before tools and on successful + failed tool results (PTA-592)', () => {
     expect(isGuardEvent('PreToolUse')).toBe(true);
     expect(isGuardEvent('PermissionRequest')).toBe(true);
     expect(isGuardEvent('PostToolUse')).toBe(true);
-    expect(isGuardEvent('PostToolUseFailure')).toBe(false);
+    expect(isGuardEvent('PostToolUseFailure')).toBe(true);
     expect(isGuardEvent('Stop')).toBe(false);
   });
 
@@ -70,6 +70,9 @@ describe('types — 3-way discriminator + field absorption', () => {
       hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'r' },
     });
     expect(JSON.parse(formatDeny('PermissionRequest', 'r')!)).toEqual({ behavior: 'deny', message: 'r' });
+    // Evaluated for telemetry (isGuardEvent), but the host ignores both
+    // continue/stopReason and modifiedResult for this kind (PTA-592) — no
+    // enforcement response to emit, so this stays null on purpose.
     expect(formatDeny('PostToolUseFailure', 'r')).toBeNull();
     expect(formatDeny('Stop', 'r')).toBeNull();
   });
