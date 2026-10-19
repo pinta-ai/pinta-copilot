@@ -2,6 +2,33 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.12.0] - 2026-10-19
+
+### Added
+
+- CLI tool rows now carry `copilot.model` (PTA-776). The CLI sends the tool
+  hooks neither `tool_use_id` nor `transcript_path`, so since 0.9.0 every CLI
+  tool span (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
+  `PermissionRequest`) had no model: 0 of 23,911 stage rows over 14 days.
+  The hook now identifies the call by what it is and looks it up in
+  `$COPILOT_HOME/session-state/<session_id>/events.jsonl`: the one
+  `assistant.message` whose `toolRequests` has the same tool name and the same
+  arguments (hook `tool_name` / `tool_input`, or `toolName` / `toolArgs`
+  parsed as JSON, compared independent of key order) and whose call has no
+  `tool.execution_complete` yet. New `copilot.model_source` value:
+  `transcript.assistant.message.unique_call`.
+- The model stays empty, never borrowed, unless exactly one such request
+  exists: two identical pending requests (parallel calls, or a denied call
+  that never completed beside a repeat), no match, a different argument, a
+  subagent's request, a request after the hook's timestamp, another session,
+  or a response with no model all give no model. A call ID present but
+  unusable also gives none.
+- Format source: the `@github/copilot` 1.0.49 package (`schemas/session-events.schema.json`,
+  the hook payload builders and the `assistant.message` emitter in `app.js`),
+  read from the npm tarball. Not measured against a live session.
+- `pinta.call_id` pairing for CLI calls without a host id: a start and its
+  end carry one id (already on main, first release with this version).
+
 ## [0.11.0] - 2026-10-11
 
 ### Changed
