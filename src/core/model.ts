@@ -124,7 +124,7 @@ function callInput(event: RawEvent): unknown {
  * (Esc) writes `abort` and no `tool.execution_complete` for the calls that were
  * waiting, and the disk write lags the hook by up to ~100 ms (@github/copilot
  * 1.0.49), so a new response may not be on disk yet when its first hook runs. An
- * older response, or one followed by a `user.message`, `abort` or the agent's
+ * older response, or one followed by a `user.message`, `abort`, `session.model_change` or the agent's
  * `assistant.turn_end`, is never evidence: the model stays empty rather than
  * being borrowed from a call the user abandoned.
  */
@@ -140,7 +140,7 @@ function fromLastResponse(
     const time = timestamp(row.timestamp);
     if (!data || time === undefined || time > at || time < started) continue;
     if (row.type === "tool.execution_complete" && typeof data.toolCallId === "string") finished.add(data.toolCallId);
-    else if (row.type === "user.message" || row.type === "abort") { if (last) last.open = false; }
+    else if (row.type === "user.message" || row.type === "abort" || row.type === "session.model_change") { if (last) last.open = false; }
     else if (row.type === "assistant.turn_end") { if (last && sameAgent(row, agent)) last.open = false; }
     else if (row.type === "assistant.message" && sameAgent(row, agent)) {
       if (turn !== undefined && data.turnId !== turn) continue;

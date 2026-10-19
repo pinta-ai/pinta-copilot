@@ -296,6 +296,11 @@ describe("model evidence for CLI hooks without a tool id (PTA-776)", () => {
     expect(value(hook(), "model")).toBeUndefined();
   });
 
+  it("is empty after a model change even when abort and the next user message are not on disk yet", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("session.model_change", 1_800, { previousModel: "old-model", newModel: "new-model" })]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
   it("is empty once the agent's turn has ended", () => {
     write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("assistant.turn_end", 1_800, { turnId: "0" })]);
     expect(value(hook(), "model")).toBeUndefined();

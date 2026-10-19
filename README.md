@@ -225,7 +225,7 @@ from one another. A future or merely latest response is never a fallback.
 The CLI sends no tool-call ID to its hooks. For those events the lookup matches
 by tool name and arguments instead (`transcript.assistant.message.unique_call`),
 and only against the agent's last `assistant.message` on disk, while no
-`user.message`, `abort` or `assistant.turn_end` follows it. The CLI writes its
+`user.message`, `abort`, `session.model_change` or `assistant.turn_end` follows it. The CLI writes its
 log with a ~100 ms debounce, so `PreToolUse` (the first call of a batch above
 all) often finds no response yet and stays empty; `PostToolUse` fills more
 often. The record format is read from the `@github/copilot` 1.0.49 package only

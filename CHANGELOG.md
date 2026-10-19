@@ -20,12 +20,15 @@ All notable changes to pinta-copilot are documented here.
 - The model stays empty, never borrowed, unless exactly one such request
   exists. It is empty when: two identical requests are pending (parallel
   calls); the matching response is not the last one on disk, or is followed by
-  a `user.message`, an `abort` or the agent's `assistant.turn_end` (an aborted
+  a `user.message`, an `abort`, a `session.model_change` or the agent's `assistant.turn_end` (an aborted
   call writes no `tool.execution_complete`, so a call the user abandoned must
   not lend its model to the repeat after `/model`); the tool or arguments
   differ; the request is a subagent's, after the hook's timestamp, or in
   another session; the response has no model; or a call ID is present but
   unusable.
+- `/model` writes `session.model_change` (a persisted event) seconds before the
+  next response, so a model switch closes the previous response even when the
+  abort and the next user message have not reached the disk.
 - Expect many empty `PreToolUse` rows (the first call of a batch most of all).
   The CLI writes the log with a ~100 ms debounce, so the response that requested
   the call is often not on disk yet when the first hook runs; the model is then
