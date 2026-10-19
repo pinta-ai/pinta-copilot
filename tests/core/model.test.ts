@@ -283,8 +283,31 @@ describe("model evidence for CLI hooks without a tool id (PTA-776)", () => {
     expect(value(hook(), "model")).toBeUndefined();
   });
 
-  it("is empty when a denied call that never completed matches as well", () => {
-    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), message("new-model", [call("b")])]);
+  const at = (ms: number) => new Date(NOW - ms).toISOString();
+  const other = (type: string, ms: number, extra: RawEvent = {}) => ({ type, timestamp: at(ms), data: extra });
+
+  it("is empty after an abort: the aborted call has no execution_complete", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("abort", 1_800, { reason: "user_abort" })]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("is empty after the next user message", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("user.message", 1_800, { content: "again" })]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("is empty once the agent's turn has ended", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("assistant.turn_end", 1_800, { turnId: "0" })]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("does not let an aborted request count against, or stand in for, the repeat that follows", () => {
+    // Abort, /model, same command again: the new response is the only evidence.
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("abort", 1_800), other("user.message", 1_700),
+      message("new-model", [call("b")], {}, NOW - 1_000)]);
+    expect(value(hook(), "model")).toEqual({ stringValue: "new-model" });
+    // The new response is not on disk yet (flush lag): nothing, not the old model.
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), other("abort", 1_800), other("user.message", 1_700)]);
     expect(value(hook(), "model")).toBeUndefined();
   });
 
@@ -293,6 +316,17 @@ describe("model evidence for CLI hooks without a tool id (PTA-776)", () => {
     expect(value(hook(), "model")).toBeUndefined();
     write([header(), message("old-model", [call("a")], {}, NOW - 1_900), complete("a", NOW - 1_800), message("new-model", [call("b")])]);
     expect(value(hook(), "model")).toEqual({ stringValue: "new-model" });
+  });
+
+  it("only looks at the agent's last response", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), message("new-model", [call("z", { command: "ls" })], {}, NOW - 1_000)]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("matches a tool without arguments (hook \"\" vs record {})", () => {
+    write([header(), message("response-model", [call("a", {}, "ask_user")])]);
+    expect(value(hook({ tool_name: "ask_user", tool_input: "" }), "model")).toEqual({ stringValue: "response-model" });
+    expect(value(hook({ tool_name: "ask_user", tool_input: undefined, toolArgs: "" }), "model")).toEqual({ stringValue: "response-model" });
   });
 
   it("is empty when the arguments or the tool differ", () => {

@@ -223,10 +223,15 @@ and the exact subagent identity. Parent and child models cannot be inherited
 from one another. A future or merely latest response is never a fallback.
 
 The CLI sends no tool-call ID to its hooks. For those events the lookup matches
-by tool name and arguments instead (`transcript.assistant.message.unique_call`).
-The record format is read from the `@github/copilot` 1.0.49 package, not from a
-live session; if the CLI writes the response after the hook runs, or formats the
-arguments differently, the model is simply empty.
+by tool name and arguments instead (`transcript.assistant.message.unique_call`),
+and only against the agent's last `assistant.message` on disk, while no
+`user.message`, `abort` or `assistant.turn_end` follows it. The CLI writes its
+log with a ~100 ms debounce, so `PreToolUse` (the first call of a batch above
+all) often finds no response yet and stays empty; `PostToolUse` fills more
+often. The record format is read from the `@github/copilot` 1.0.49 package only
+(the latest, 1.0.98, is a native binary that could not be inspected) and was not
+measured on a live session. To measure coverage, compare the share of tool rows
+with this `model_source` per `copilot.hook` and per `service.version`.
 
 **CLI tool hooks omit a stable tool-call ID. Their model is filled only when a
 single pending request matches the tool name and arguments; otherwise it remains
