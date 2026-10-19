@@ -1,6 +1,7 @@
 import path from "node:path";
 import { copilotHome } from "./config.js";
-import { classify, type RawEvent } from "./types.js";
+import { classify, toolInput, toolName, type RawEvent } from "./types.js";
+import { stable } from "./calls.js";
 import type { Surface } from "./surface.js";
 import {
   consensus, eventTime, identifier, modelName, readTranscript, record,
@@ -36,9 +37,14 @@ export function resolveModel(event: RawEvent, surface: Surface, now: number): Mo
 
 function fromTranscript(event: RawEvent, surface: Surface, now: number): ModelEvidence | undefined {
   const kind = classify(event);
-  const tool = sameIdentifier(event, ["tool_use_id", "toolUseId", "tool_call_id", "toolCallId"]);
+  const idKeys = ["tool_use_id", "toolUseId", "tool_call_id", "toolCallId"];
+  const tool = sameIdentifier(event, idKeys);
   const startup = kind === "SessionStart" && event.source === "startup";
-  if (!startup && (!TOOL_EVENTS.has(kind) || !tool)) return undefined;
+  if (!startup && !TOOL_EVENTS.has(kind)) return undefined;
+  // An id field that is present but unusable (conflicting, malformed) is not "no id".
+  if (!startup && !tool && idKeys.some((key) => event[key] !== undefined)) return undefined;
+  // Without an id, the call is only identifiable by its name and arguments.
+  if (!startup && !tool && (!toolName(event) || callInput(event) === undefined)) return undefined;
   const session = sameIdentifier(event, ["session_id", "sessionId"]);
   const agent = sameIdentifier(event, AGENT_KEYS);
   const turn = sameIdentifier(event, TURN_KEYS);
@@ -74,6 +80,8 @@ function fromTranscript(event: RawEvent, surface: Surface, now: number): ModelEv
     return name ? { name, source: "transcript.session.selected" } : undefined;
   }
 
+  if (!tool) return fromUniquePendingCall(event, transcript.rows, agent, turn, started, at);
+
   const candidates: Array<ModelEvidence | undefined> = [];
   for (const row of transcript.rows) {
     const data = record(row.data);
@@ -91,4 +99,50 @@ function fromTranscript(event: RawEvent, surface: Surface, now: number): ModelEv
     candidates.push(name ? { name, source: `transcript.${row.type}` } : undefined);
   }
   return consensus(candidates);
+}
+
+/** The CLI hands the hook `function.name` and the JSON-parsed `function.arguments`; a string is parsed. */
+function callInput(event: RawEvent): unknown {
+  const input = toolInput(event);
+  if (typeof input !== "string") return input;
+  try { return JSON.parse(input); } catch { return input; }
+}
+
+/**
+ * The CLI issues no tool id to its hooks. The call is then identified by what
+ * it is: the one assistant response that requested this tool name with these
+ * arguments and whose call has not finished yet. Two such requests (parallel
+ * identical calls, a denied call that never completed, an earlier repeat) make
+ * it ambiguous, and so does none: the model stays empty rather than borrowed.
+ */
+function fromUniquePendingCall(
+  event: RawEvent, rows: RecordValue[], agent: string | undefined, turn: string | undefined,
+  started: number, at: number,
+): ModelEvidence | undefined {
+  const name = toolName(event);
+  const input = callInput(event);
+  if (!name || input === undefined) return undefined;
+  const wanted = stable(input);
+  const requested = new Map<string, ModelEvidence | undefined>();
+  const finished = new Set<string>();
+  for (const row of rows) {
+    const data = record(row.data);
+    const time = timestamp(row.timestamp);
+    if (!data || time === undefined || time > at || time < started) continue;
+    if (row.type === "tool.execution_complete" && typeof data.toolCallId === "string") finished.add(data.toolCallId);
+    if (row.type !== "assistant.message" || !sameAgent(row, agent)
+      || (turn !== undefined && data.turnId !== turn) || !Array.isArray(data.toolRequests)) continue;
+    const model = modelName(data.model);
+    const evidence = model ? { name: model, source: "transcript.assistant.message.unique_call" } : undefined;
+    for (const item of data.toolRequests) {
+      const request = record(item);
+      if (!request || request.name !== name || typeof request.toolCallId !== "string"
+        || stable(request.arguments) !== wanted) continue;
+      // The same call id announced twice with different models is not evidence.
+      requested.set(request.toolCallId, requested.has(request.toolCallId) && requested.get(request.toolCallId)?.name !== evidence?.name
+        ? undefined : evidence);
+    }
+  }
+  const pending = [...requested].filter(([id]) => !finished.has(id));
+  return pending.length === 1 ? pending[0][1] : undefined;
 }

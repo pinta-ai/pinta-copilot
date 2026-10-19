@@ -187,7 +187,7 @@ describe("model evidence", () => {
     expect(value(attributes(overrides), "model")).toBeUndefined();
   });
 
-  it("does no transcript IO for CLI hooks without a stable tool ID", () => {
+  it("does no transcript IO for CLI hooks with neither a tool ID nor a tool name and input", () => {
     const open = vi.spyOn(fs, "openSync");
     expect(resolveModel({ hook_event_name: "PreToolUse", session_id: "session-1", tool_name: "bash", timestamp: NOW }, "cli", NOW)).toBeUndefined();
     expect(open).not.toHaveBeenCalled();
@@ -236,5 +236,106 @@ describe("model evidence", () => {
     expect(payload.resourceSpans[0].scopeSpans[0].spans).toHaveLength(1);
     expect(JSON.stringify(payload)).not.toContain(secret);
     expect(value(payload.resourceSpans[0].scopeSpans[0].spans[0].attributes, "model")).toEqual({ stringValue: "host-model" });
+  });
+});
+
+describe("model evidence for CLI hooks without a tool id (PTA-776)", () => {
+  const BASH = { command: "npm test" };
+  const call = (id: string, args: unknown = BASH, name = "bash") => ({ toolCallId: id, name, arguments: args });
+  const message = (model: unknown, requests: unknown[], extra: RawEvent = {}, at = NOW - 1_000) => ({
+    type: "assistant.message", timestamp: new Date(at).toISOString(), data: { messageId: randomUUID(), model, toolRequests: requests }, ...extra,
+  });
+  const complete = (id: string, at = NOW - 500) => ({ type: "tool.execution_complete", timestamp: new Date(at).toISOString(), data: { toolCallId: id, success: true } });
+  /** What the CLI hands the hook: no tool_use_id, no transcript_path, tool_input = parsed toolArgs. */
+  const hook = (overrides: RawEvent = {}) => attributes({
+    hook_event_name: "PreToolUse", transcript_path: undefined, tool_use_id: undefined,
+    tool_name: "bash", tool_input: BASH, ...overrides,
+  });
+  beforeEach(() => {
+    vi.stubEnv("COPILOT_HOME", directory);
+    const sessionDirectory = path.join(directory, "session-state", "session-1");
+    fs.mkdirSync(sessionDirectory, { recursive: true });
+    transcript = path.join(sessionDirectory, "events.jsonl");
+  });
+
+  it("names the model of the one pending request with the same tool and arguments", () => {
+    write([header(), message("response-model", [call("a")])]);
+    for (const kind of ["PreToolUse", "PostToolUse", "PermissionRequest"]) {
+      const attrs = hook({ hook_event_name: kind });
+      expect(value(attrs, "model")).toEqual({ stringValue: "response-model" });
+      expect(value(attrs, "model_source")).toEqual({ stringValue: "transcript.assistant.message.unique_call" });
+    }
+  });
+
+  it("reads the arguments from a JSON toolArgs string and the camel-case tool name", () => {
+    write([header(), message("response-model", [call("a")])]);
+    expect(value(hook({ tool_name: undefined, tool_input: undefined, toolName: "bash", toolArgs: JSON.stringify(BASH) }), "model"))
+      .toEqual({ stringValue: "response-model" });
+  });
+
+  it("ignores argument key order", () => {
+    write([header(), message("response-model", [call("a", { b: 1, a: 2 })])]);
+    expect(value(hook({ tool_input: { a: 2, b: 1 } }), "model")).toEqual({ stringValue: "response-model" });
+  });
+
+  it("is empty when two pending requests match, even in the same response", () => {
+    write([header(), message("response-model", [call("a"), call("b")])]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("is empty when a denied call that never completed matches as well", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), message("new-model", [call("b")])]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("does not hand a finished identical call's model to a later repeat", () => {
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), complete("a", NOW - 1_800)]);
+    expect(value(hook(), "model")).toBeUndefined();
+    write([header(), message("old-model", [call("a")], {}, NOW - 1_900), complete("a", NOW - 1_800), message("new-model", [call("b")])]);
+    expect(value(hook(), "model")).toEqual({ stringValue: "new-model" });
+  });
+
+  it("is empty when the arguments or the tool differ", () => {
+    write([header(), message("response-model", [call("a", { command: "npm run build" })])]);
+    expect(value(hook(), "model")).toBeUndefined();
+    write([header(), message("response-model", [call("a", BASH, "view")])]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("is empty when the matching response names no model or a placeholder", () => {
+    write([header(), message(undefined, [call("a")])]);
+    expect(value(hook(), "model")).toBeUndefined();
+    write([header(), message("unknown", [call("a")])]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("does not take a subagent's request for the main agent's call", () => {
+    write([header(), message("sub-model", [call("a")], { agentId: "agent-1" })]);
+    expect(value(hook(), "model")).toBeUndefined();
+    write([header(), { ...message("x", []), data: { model: "sub-model", toolRequests: [call("a")], parentToolCallId: "p" } }]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("ignores requests from after the hook and from another session", () => {
+    write([header(), message("late-model", [call("a")], {}, NOW + 1_000)]);
+    expect(value(hook(), "model")).toBeUndefined();
+    write([header("session-2"), message("other", [call("a")])]);
+    expect(value(hook(), "model")).toBeUndefined();
+  });
+
+  it("does not search for a model on surfaces other than the CLI", () => {
+    write([header(), message("response-model", [call("a")])]);
+    const event = { hook_event_name: "PreToolUse", session_id: "session-1", timestamp: NOW, tool_name: "bash", tool_input: BASH };
+    expect(resolveModel(event, "ext", NOW)).toBeUndefined();
+  });
+
+  it("keeps an explicit host model ahead of the transcript", () => {
+    write([header(), message("response-model", [call("a")])]);
+    expect(value(hook({ model: "host-model" }), "model")).toEqual({ stringValue: "host-model" });
+  });
+
+  it("does not search when an id field is present but unusable", () => {
+    write([header(), message("response-model", [call("a")])]);
+    expect(value(hook({ tool_use_id: "../bad" }), "model")).toBeUndefined();
   });
 });
