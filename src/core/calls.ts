@@ -66,7 +66,7 @@ function callKey(toolName: string | undefined, toolInput: unknown): string {
  * JSON with object keys in a fixed order, so that the same arguments hash the
  * same way whichever order the host happened to serialise them in.
  */
-function stable(value: unknown): string {
+export function stable(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>

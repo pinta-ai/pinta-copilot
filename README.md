@@ -211,6 +211,7 @@ becomes `model_source`; any previous host source is kept as
 |---|---|
 | `hook.model` | The hook's explicit model. A SessionStart selection is **not proof of the routed response model**. |
 | `transcript.assistant.message` | `assistant.message.data.model` on a response requesting the hook's exact tool-call ID. |
+| `transcript.assistant.message.unique_call` | CLI hooks without a tool-call ID: `assistant.message.data.model` on the one response whose `toolRequests` has the hook's tool name and arguments and whose call has not completed. Two or more such requests, or none, give no model. |
 | `transcript.tool.execution_start` / `transcript.tool.execution_complete` | `data.model` on the exact tool execution. Matching assistant/execution records must agree; conflicts are omitted. |
 | `transcript.session.selected` | Startup selection from `session.start.data.selectedModel` plus model changes at/before the hook timestamp, only when the entire bounded history is available. **Selected/requested, not routed.** Never carried onto tools or resume events. |
 
@@ -221,7 +222,19 @@ The CLI lookup uses the supplied `transcript_path`/`transcriptPath`, or
 and the exact subagent identity. Parent and child models cannot be inherited
 from one another. A future or merely latest response is never a fallback.
 
-**Many current CLI tool hooks omit a stable tool-call ID. Their model remains
+The CLI sends no tool-call ID to its hooks. For those events the lookup matches
+by tool name and arguments instead (`transcript.assistant.message.unique_call`),
+and only against the agent's last `assistant.message` on disk, while no
+`user.message`, `abort`, `session.model_change` or `assistant.turn_end` follows it. The CLI writes its
+log with a ~100 ms debounce, so `PreToolUse` (the first call of a batch above
+all) often finds no response yet and stays empty; `PostToolUse` fills more
+often. The record format is read from the `@github/copilot` 1.0.49 package only
+(the latest, 1.0.98, is a native binary that could not be inspected) and was not
+measured on a live session. To measure coverage, compare the share of tool rows
+with this `model_source` per `copilot.hook` and per `service.version`.
+
+**CLI tool hooks omit a stable tool-call ID. Their model is filled only when a
+single pending request matches the tool name and arguments; otherwise it remains
 absent**, even if a session selection or a recent response is visible. A
 subagent ID without its own transcript, an unrecognized IDE/cloud transcript
 format, or a record outside the read window also leaves the model absent.
@@ -230,8 +243,8 @@ a claim of complete model coverage for every host version.
 
 Each lookup is read-only: at most a 256 KiB header plus a 1 MiB tail and 4,096
 complete JSONL records, with no subprocess, directory scan, or cross-hook model
-cache. Explicit models and tool hooks without correlation IDs do no model
-lookup IO. Missing/unreadable files, non-regular files, leaf symlinks,
+cache. Explicit models and tool hooks with neither a correlation ID nor a tool name
+and input do no model lookup IO. Missing/unreadable files, non-regular files, leaf symlinks,
 malformed records and ambiguous metadata fail quietly; incomplete boundary
 lines are ignored. Transcript contents are never logged or forwarded by this
 lookup. Guard behavior, event counts, and the existing privacy pipeline are
