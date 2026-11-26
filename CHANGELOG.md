@@ -2,6 +2,13 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.12.1] - 2026-11-27
+
+### Changed
+
+- Stable release of `0.12.1-pta1010.1`. Bundles Core `0.11.1`, which is the same code as
+  Core `0.11.1-pta1010.2`. No behavior change from the Stage candidate.
+
 ## [0.12.1-pta1010.1] - 2026-11-26
 
 ### Fixed
