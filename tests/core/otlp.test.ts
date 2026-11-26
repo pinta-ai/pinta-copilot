@@ -14,6 +14,27 @@ function get(p: ReturnType<typeof buildOtlpPayload>, key: string) {
 }
 
 describe('buildOtlpPayload — copilot', () => {
+  it.each(['tool_response', 'tool_result', 'toolResult'])('attributes only returned content to output in %s', (field) => {
+    const inputKey = `sk-${'FAKE0'.repeat(9)}input`;
+    const outputKey = `sk-${'FAKE0'.repeat(9)}output`;
+    const result = field === 'tool_response' ? { stdout: outputKey }
+      : field === 'tool_result' ? { text_result_for_llm: outputKey, diagnostics: inputKey }
+        : { textResultForLlm: outputKey, diagnostics: inputKey };
+    const payload = buildOtlpPayload({
+      event: {
+        hook_event_name: 'PostToolUse', session_id: 'credential-scope',
+        tool_name: 'read_file', tool_input: { note: inputKey }, [field]: result,
+      },
+      traceId: TRACE, surface: field === 'tool_response' ? 'ext' : 'cli',
+    });
+    expect(JSON.parse(get(payload, 'pinta.facts')).items).toMatchObject([
+      { secrets: { count: 1, origins: ['attributes'] } },
+      { secrets: { count: 1, origins: ['toolOutput'] } },
+    ]);
+    expect(JSON.stringify(payload)).not.toContain(inputKey);
+    expect(JSON.stringify(payload)).not.toContain(outputKey);
+  });
+
   it('one span per call, span name copilot.<snake>', () => {
     const p = buildOtlpPayload({
       event: { hook_event_name: 'SessionStart', session_id: 's', cwd: '/t' },

@@ -2,6 +2,18 @@
 
 All notable changes to pinta-copilot are documented here.
 
+## [0.12.1-pta1010.1] - 2026-11-26
+
+### Fixed
+
+- Bundle Core `0.11.1-pta1010.1` for bounded Fetch-mode and CLI-option semantics
+  and OpenAI-key token boundaries. Real passwords and unsupported cases remain
+  protected; the Acorn MIT notice is included.
+- Preserve returned-secret provenance across extension output and snake/camel
+  CLI results, using the host's returned-text selector rather than diagnostics.
+- Publish as a Stage candidate; existing stable selection and model attribution
+  remain unchanged until an explicit compatible catalog approval is installed.
+
 ## [0.12.0] - 2026-10-19
 
 ### Added

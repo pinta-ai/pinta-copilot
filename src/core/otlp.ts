@@ -11,7 +11,7 @@ import {
   type OtlpAttribute,
   type OtlpPayload,
 } from "@pinta-ai/core";
-import { type RawEvent, eventName } from "./types.js";
+import { type RawEvent, eventName, returnedText } from "./types.js";
 import type { Surface } from "./surface.js";
 import { resolveModel } from "./model.js";
 import { applyModelEvidence } from "./model-evidence.js";
@@ -166,6 +166,13 @@ const BASH_CONTEXT_KEYS: ReadonlySet<string> = new Set([
 const ATTR_POLICY: AttrPolicy = {
   skipRedactKeys: SKIP_REDACT_KEYS,
   bashContextKeys: BASH_CONTEXT_KEYS,
+  outputForKey: (key, value) => {
+    if (key === "copilot.tool_response") return value;
+    if (key === "copilot.tool_result" || key === "copilot.toolResult") {
+      return returnedText({ [key.slice("copilot.".length)]: value });
+    }
+    return undefined;
+  },
 };
 
 // Discriminator keys covered by `copilot.hook` — don't re-emit them raw.
