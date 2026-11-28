@@ -7,7 +7,8 @@
 // pinta-cc vendors for its A2 scanner) so the M5d scanner has a contract to
 // implement against. Do NOT diverge from the plan's shape here — when
 // @pinta-ai/core@^0.4.0 is available, this file is deleted and imports are
-// repointed (A4).
+// repointed (A4). The optional signal is a backwards-compatible manager
+// cancellation extension; callers that only pass since keep working.
 
 /**
  * How a transcript file's on-disk history behaves, which determines the
@@ -41,7 +42,7 @@ export type TranscriptClass = "session-log" | "meta" | "memory" | "other";
 export interface TranscriptSource {
   id: string; // 'pinta-cc'
   roots(): Promise<string[]>; // ['~/.claude/projects']
-  scan(opts: { since?: Date }): AsyncIterable<TranscriptFile>;
+  scan(opts: { since?: Date; signal?: AbortSignal }): AsyncIterable<TranscriptFile>;
   classify?(relPath: string): TranscriptClass;
   // 'database' 파일(SQLite 등)의 정합 스냅샷 획득 (backup API / VACUUM INTO).
   // 반환된 임시 파일을 업로드 후 삭제. 미구현이면 해당 파일 스킵 + audit.
