@@ -31,18 +31,16 @@
  * copilot session dirs aren't project-keyed, so `projectKey` is always
  * omitted (plan: "projectKey: omit").
  *
- * No exclusion rules beyond `*.db-wal`/`*.db-shm` (plan: "Exclude
- * `*.db-wal`/`*.db-shm`") — those are SQLite's own write-ahead-log/shared-
- * memory sidecars for `session.db`; uploading them separately would be
- * both useless (they're meaningless without the exact live `session.db`
- * they're paired with) and a torn-read risk. `session.db` itself goes
- * through `snapshot()` instead (plan §4.2 `database` semantics).
+ * Dependency installations and VCS internals inside session worktrees are
+ * pruned before opening them. Ordinary files/, research/, checkpoints/ and
+ * rewind artifacts remain included. SQLite -wal/-shm files are excluded;
+ * session.db itself goes through snapshot() for a consistent read.
  *
  * Per plan §4.2, the lifecycle module sticks to `node:*` APIs only (no Bun-
  * specific globals) so it runs unmodified whether the sidecar host is Node
  * or Bun.
  */
-import { opendir, stat } from "node:fs/promises";
+import { opendir, lstat } from "node:fs/promises";
 import path from "node:path";
 
 import { copilotHome } from "../core/config.js";
@@ -59,14 +57,10 @@ const WRAPPER_ID = "pinta-copilot";
 const EVENTS_LOG_BASENAME = "events.jsonl";
 const SESSION_DB_BASENAME = "session.db";
 const REWIND_BACKUPS_PREFIX = "rewind-snapshots/backups/";
+const EXCLUDED_DIRECTORIES = new Set(["node_modules", ".git", ".hg", ".svn", ".venv", "__pycache__"]);
 
 function sessionStateRoot(): string {
   return path.join(copilotHome(), "session-state");
-}
-
-/** Relative path from `root` to `absPath`, POSIX-style (`/` separators) regardless of platform. */
-function toPosixRelPath(root: string, absPath: string): string {
-  return path.relative(root, absPath).split(path.sep).join("/");
 }
 
 /** `*.db-wal` / `*.db-shm` — SQLite's own sidecars for `session.db`, never yielded standalone. */
@@ -75,18 +69,19 @@ function isSqliteSidecar(basename: string): boolean {
 }
 
 function sessionInfoFor(relPath: string): Pick<TranscriptFile, "sessionId"> {
-  const [uuid] = relPath.split("/");
+  const slash = relPath.indexOf("/");
   // A file directly under the root, outside any session dir — not expected
   // in practice (every real entry is <uuid>/**), but don't crash on it: no
   // sessionId to tag.
-  if (!uuid || uuid === relPath) {
+  if (slash <= 0) {
     return {};
   }
-  return { sessionId: uuid };
+  return { sessionId: relPath.slice(0, slash) };
 }
 
 function semanticsFor(relPath: string, basename: string): TranscriptSemantics {
-  const isTopLevel = relPath.split("/").length === 2;
+  const slash = relPath.indexOf("/");
+  const isTopLevel = slash >= 0 && slash === relPath.lastIndexOf("/");
   if (isTopLevel && basename === EVENTS_LOG_BASENAME) {
     return "append-log";
   }
@@ -101,9 +96,9 @@ function semanticsFor(relPath: string, basename: string): TranscriptSemantics {
 
 /** `classify()` — coarse content type from `relPath` alone (plan spec). */
 export function classify(relPath: string): TranscriptClass {
-  const segments = relPath.split("/");
-  const basename = segments[segments.length - 1] ?? "";
-  const isTopLevel = segments.length === 2;
+  const slash = relPath.lastIndexOf("/");
+  const basename = relPath.slice(slash + 1);
+  const isTopLevel = slash >= 0 && slash === relPath.indexOf("/");
 
   if (isTopLevel && (basename === EVENTS_LOG_BASENAME || basename === SESSION_DB_BASENAME)) {
     return "session-log";
@@ -121,62 +116,65 @@ export async function roots(): Promise<string[]> {
   return [sessionStateRoot()];
 }
 
-/**
- * Recursive, streaming walk of `dir` yielding every *file* found (never
- * directories), depth-first. Uses `opendir`'s own async iteration rather
- * than `readdir` so we never materialize a full directory listing (or the
- * whole tree) in memory at once — the corpus is 1.1GB / 3,021 files and
- * ~1.13GB of that is `rewind-snapshots/backups/**` alone (plan §4.3).
- */
-async function* walkFiles(root: string, dir: string): AsyncGenerator<{ absPath: string; relPath: string }> {
+function missingPath(error: unknown): boolean {
+  return error instanceof Error && "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+/** Lazy depth-first traversal, with excluded subtrees pruned before opening. */
+async function* walkFiles(
+  dir: string,
+  relDir = "",
+  signal?: AbortSignal,
+): AsyncGenerator<{ absPath: string; relPath: string; basename: string }> {
+  signal?.throwIfAborted();
   let entries;
   try {
     entries = await opendir(dir);
-  } catch {
-    // Root doesn't exist yet (fresh install, no sessions recorded) or
-    // vanished mid-walk (deleted session) — nothing to yield.
-    return;
+  } catch (error) {
+    if (missingPath(error)) return;
+    throw new Error("Copilot transcript directory could not be opened", { cause: error });
   }
 
   try {
     for await (const entry of entries) {
+      signal?.throwIfAborted();
+      if (entry.isDirectory() && EXCLUDED_DIRECTORIES.has(entry.name)) continue;
+      if (entry.isFile() && isSqliteSidecar(entry.name)) continue;
       const absPath = path.join(dir, entry.name);
+      const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        yield* walkFiles(root, absPath);
+        yield* walkFiles(absPath, relPath, signal);
       } else if (entry.isFile()) {
-        yield { absPath, relPath: toPosixRelPath(root, absPath) };
+        yield { absPath, relPath, basename: entry.name };
       }
       // Symlinks and other special entries are skipped — copilot does not
       // produce them under `session-state/`, and following them risks
       // escaping the root or cycles.
     }
-  } catch {
-    // Directory removed while we were iterating it — treat as end of
-    // stream for this subtree rather than failing the whole scan.
-    return;
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (missingPath(error)) return;
+    throw new Error("Copilot transcript directory scan failed", { cause: error });
   }
 }
 
-async function* scan(opts: { since?: Date }): AsyncIterable<TranscriptFile> {
+async function* scan(opts: { since?: Date; signal?: AbortSignal }): AsyncIterable<TranscriptFile> {
+  opts.signal?.throwIfAborted();
   const [root] = await roots();
   const sinceMs = opts.since?.getTime();
 
-  for await (const { absPath, relPath } of walkFiles(root, root)) {
-    const segments = relPath.split("/");
-    const basename = segments[segments.length - 1] ?? "";
-
-    if (isSqliteSidecar(basename)) {
-      continue;
-    }
-
+  for await (const { absPath, relPath, basename } of walkFiles(root, "", opts.signal)) {
+    opts.signal?.throwIfAborted();
     let st;
     try {
-      st = await stat(absPath);
-    } catch {
-      // Removed between listing and stat (TOCTOU) — skip, next cycle will
-      // simply not see it either (plan §4.1 "삭제됨: 스킵").
-      continue;
+      st = await lstat(absPath);
+    } catch (error) {
+      if (missingPath(error)) continue;
+      throw new Error("Copilot transcript file could not be inspected", { cause: error });
     }
+    opts.signal?.throwIfAborted();
+    if (!st.isFile()) continue;
 
     if (sinceMs !== undefined && st.mtime.getTime() <= sinceMs) {
       continue;

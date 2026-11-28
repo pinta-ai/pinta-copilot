@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
+import { opendir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { lifecycle, classify } from "../../src/lifecycle/scanner";
 import type { TranscriptFile } from "../../src/lifecycle/types";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, opendir: vi.fn(actual.opendir) };
+});
 
 const SAVED_COPILOT_HOME = process.env.COPILOT_HOME;
 
@@ -55,6 +61,7 @@ async function collect(iter: AsyncIterable<TranscriptFile>): Promise<Map<string,
 }
 
 beforeEach(() => {
+  vi.mocked(opendir).mockClear();
   tmpRoot = makeTmpDir();
   process.env.COPILOT_HOME = tmpRoot;
   buildFixture();
@@ -87,6 +94,47 @@ describe("scan() — excludes *.db-wal/*.db-shm", () => {
     expect(files.has(`${SESSION_ID}/session.db-shm`)).toBe(false);
     // but the main db file itself IS yielded
     expect(files.has(`${SESSION_ID}/session.db`)).toBe(true);
+  });
+
+  it("prunes dependency and VCS directories without excluding ordinary artifacts", async () => {
+    for (const name of ["node_modules", ".git", ".hg", ".svn", ".venv", "__pycache__"]) {
+      write(`${SESSION_ID}/files/wt/project/${name}/nested/ignored.txt`, "not a transcript");
+    }
+    write(`${SESSION_ID}/files/wt/project/src/changed.ts`, "export const changed = true;");
+    write(`${SESSION_ID}/files/dist/report.html`, "generated evidence");
+    write(`${SESSION_ID}/files/archive.db-wal/notes.md`, "an ordinary directory");
+    write(`${SESSION_ID}/checkpoints/node_modules.md`, "dependency investigation");
+    write(`${SESSION_ID}/rewind-snapshots/backups/node_modules`, "opaque backup");
+
+    const files = await collect(lifecycle.scan({}));
+
+    expect([...files.keys()].some((rel) => /\/(?:node_modules|\.git|\.hg|\.svn|\.venv|__pycache__)\//.test(rel))).toBe(false);
+    const opened = vi.mocked(opendir).mock.calls.map(([dir]) => String(dir));
+    for (const name of ["node_modules", ".git", ".hg", ".svn", ".venv", "__pycache__"]) {
+      expect(opened).not.toContain(path.join(tmpRoot, "session-state", SESSION_ID, "files", "wt", "project", name));
+    }
+    expect(files.has(`${SESSION_ID}/files/wt/project/src/changed.ts`)).toBe(true);
+    expect(files.has(`${SESSION_ID}/files/dist/report.html`)).toBe(true);
+    expect(files.has(`${SESSION_ID}/files/archive.db-wal/notes.md`)).toBe(true);
+    expect(files.has(`${SESSION_ID}/checkpoints/node_modules.md`)).toBe(true);
+    expect(files.has(`${SESSION_ID}/rewind-snapshots/backups/node_modules`)).toBe(true);
+  });
+
+  it("does not follow directory symlinks outside the session", async () => {
+    const outside = path.join(tmpRoot, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "not-collected.txt"), "outside");
+    fs.symlinkSync(outside, path.join(tmpRoot, "session-state", SESSION_ID, "files", "linked"), "junction");
+    const files = await collect(lifecycle.scan({}));
+    expect([...files.keys()].some((rel) => rel.includes("/linked/"))).toBe(false);
+  });
+
+  it("cancels an active scan instead of silently reporting a complete scan", async () => {
+    const controller = new AbortController();
+    const iterator = lifecycle.scan({ signal: controller.signal })[Symbol.asyncIterator]();
+    expect((await iterator.next()).done).toBe(false);
+    controller.abort(new Error("scan cancelled"));
+    await expect(iterator.next()).rejects.toThrow("scan cancelled");
   });
 });
 
